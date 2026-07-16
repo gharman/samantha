@@ -82,9 +82,14 @@ def arm(entry: str | Path | None = None, *, force: bool = False, **overrides: ob
         LOG.info("no API key; cognition dormant")
     LOG.info("resident armed (%s) · project %s…", config.mode, key[:4])
     journal.write("observation", source="boot", payload={"mode": config.mode, "project": key})
+    try:
+        from .observe import Observer
+        _resident.observer = Observer(journal)
+        _resident.observer.start()
+    except Exception as exc:
+        LOG.warning("observer disabled: %s", exc)
     return _resident
 
 
 def resident() -> Resident | None:
     return _resident
-
