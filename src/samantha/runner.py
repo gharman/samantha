@@ -10,7 +10,7 @@ from ._boot import arm
 
 def run(script: str, args: list[str], **config: object) -> int:
     path = str(Path(script).resolve())
-    arm(path, force=True, **config)
+    resident = arm(path, force=True, **config)
     old_argv = sys.argv
     sys.argv = [path, *args]
     try:
@@ -20,4 +20,9 @@ def run(script: str, args: list[str], **config: object) -> int:
         return int(exc.code or 0) if isinstance(exc.code, int | type(None)) else 1
     finally:
         sys.argv = old_argv
-
+        if resident and hasattr(resident, "observer"):
+            from .sentinels import Sentinels
+            events = Sentinels(resident.observer.metrics).inspect_metrics()
+            for event in events:
+                resident.journal.write("observation", source="sentinel", payload={"sentinel": event.sentinel, "evidence": event.evidence})
+            resident.stop()

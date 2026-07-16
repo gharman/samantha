@@ -88,6 +88,16 @@ def arm(entry: str | Path | None = None, *, force: bool = False, **overrides: ob
         _resident.observer.start()
     except Exception as exc:
         LOG.warning("observer disabled: %s", exc)
+    if entry:
+        try:
+            from .observe.source import read_source
+            inventory = read_source(Path(entry).resolve(), root)
+            theory = config.goal or next((v["docstring"] for v in inventory["files"].values() if v["docstring"]), "Python program")
+            (state / "model.md").write_text(f"# Program theory\n\n{theory}\n")
+            (state / "goals.md").touch(exist_ok=True)
+            LOG.info("theory: %s", theory.splitlines()[0][:160])
+        except Exception as exc:
+            LOG.warning("source inventory disabled: %s", exc)
     return _resident
 
 
