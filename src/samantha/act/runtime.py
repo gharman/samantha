@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import inspect
 import logging
 import queue
-import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from .introspect import LiveNode, RuntimeGraph, _preview
@@ -161,6 +160,7 @@ class RuntimeOperator:
     ) -> OperationResult:
         op, path = str(operation["op"]), node.path
         value = operation.get("value")
+        value = self._resolve_refs(value)
         if op == "set":
             old = node.read()
             node.write(value)
@@ -191,10 +191,12 @@ class RuntimeOperator:
             target = node.read()
             if not callable(target):
                 raise TypeError("target is not callable")
-            if not self._project_callable(target):
-                raise PermissionError("only project-defined callables may be invoked")
-            args = operation.get("args") or []
-            kwargs = operation.get("kwargs") or {}
+            if not self._callable_allowed(target):
+                raise PermissionError(
+                    "callable is an explicitly barred execution primitive"
+                )
+            args = self._resolve_refs(operation.get("args") or [])
+            kwargs = self._resolve_refs(operation.get("kwargs") or {})
             result = target(*args, **kwargs)
             if inspect.isawaitable(result):
                 result = asyncio.run(result)
@@ -211,8 +213,10 @@ class RuntimeOperator:
         original = node.read()
         if not callable(original) or not node.mutable:
             raise TypeError("interception requires an assignable callable")
-        if not self._project_callable(original):
-            raise PermissionError("only project-defined callables may be intercepted")
+        if not self._callable_allowed(original):
+            raise PermissionError(
+                "callable is an explicitly barred execution primitive"
+            )
         overrides = operation.get("kwargs") or {}
         metadata = operation.get("value") or {}
         lifetime = operation.get("lifetime") or group.lifetime
@@ -300,21 +304,43 @@ class RuntimeOperator:
     def _protected(self, path: str) -> bool:
         return any(pattern.search(path) for pattern in self.resident.ledger.protect)
 
-    def _project_callable(self, target: Any) -> bool:
-        module = sys.modules.get(getattr(target, "__module__", ""))
-        module_file = getattr(module, "__file__", None)
-        if module_file:
-            try:
-                if self.resident.root.resolve() in Path(module_file).resolve().parents:
-                    return True
-            except OSError:
-                pass
-        try:
-            source = inspect.getsourcefile(target) or inspect.getfile(target)
-            root = self.resident.root.resolve()
-            return root in Path(source).resolve().parents
-        except (TypeError, OSError):
+    def _callable_allowed(self, target: Any) -> bool:
+        if any(
+            target is barred
+            for barred in (builtins.eval, builtins.exec, builtins.compile)
+        ):
             return False
+        module = str(getattr(target, "__module__", ""))
+        name = str(getattr(target, "__name__", ""))
+        if module == "subprocess":
+            return False
+        if module in {"os", "posix", "nt"} and name in {
+            "system",
+            "popen",
+            "spawnl",
+            "spawnle",
+            "spawnlp",
+            "spawnlpe",
+            "spawnv",
+            "spawnve",
+            "spawnvp",
+            "spawnvpe",
+            "execv",
+            "execve",
+            "execvp",
+            "execvpe",
+        }:
+            return False
+        return callable(target)
+
+    def _resolve_refs(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            if set(value) == {"$ref"} and isinstance(value["$ref"], str):
+                return self.graph.get(value["$ref"]).read()
+            return {key: self._resolve_refs(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._resolve_refs(item) for item in value]
+        return value
 
 
 def _length(value: Any) -> int | None:

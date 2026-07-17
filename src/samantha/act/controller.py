@@ -22,7 +22,7 @@ class ActController:
         if not planner:
             return self._plain_fallback(operator_text)
         transcript: list[dict[str, Any]] = []
-        for round_number in range(4):
+        for round_number in range(8):
             context = self._context(operator_text, transcript, round_number)
             try:
                 plan = planner([{"role": "user", "content": json.dumps(context)}])
@@ -49,10 +49,7 @@ class ActController:
                 result.ok and self._is_write(operation)
                 for operation, result in zip(operations, group.results, strict=False)
             )
-            read_answer = plan.get("intent") == "inspect" and any(
-                result.ok for result in group.results
-            )
-            if mutated or read_answer:
+            if mutated:
                 receipt = self._receipt(group, "")
                 answer = self._final_answer(
                     operator_text,
@@ -60,7 +57,7 @@ class ActController:
                     str(plan.get("reply") or ""),
                 )
                 return f"{receipt}\n\n{answer}" if answer else receipt
-        return "I inspected the runtime but could not form a verified action plan."
+        return "I exhausted the runtime inspection budget without applying a verified action."
 
     def _context(
         self, operator_text: str, transcript: list[dict[str, Any]], round_number: int
@@ -74,9 +71,12 @@ class ActController:
             "operator_request": operator_text,
             "authority": (
                 "The current operator message authorizes relevant runtime actions. "
-                "Irreversible existing-callable invocation is allowed only when directly "
-                "necessary for this request. Do not use exec, eval, source writes, imports, "
-                "or invented paths. Inspect first when the correct target is uncertain."
+                "Use Python's full live introspection surface: reachable application objects, "
+                "methods, adapters, database/file/service APIs, and state are eligible even "
+                "without handlers or declarations. Irreversible existing-callable invocation "
+                "is allowed only when directly necessary for this request. Do not use exec, "
+                "eval, subprocess/process launching, source writes, imports, or invented paths. "
+                "Inspect first when the correct target is uncertain."
             ),
             "operation_semantics": {
                 "search": "query live paths; read-only",
@@ -84,7 +84,10 @@ class ActController:
                 "set": "assign JSON value to exact attribute/item path",
                 "append": "append JSON value to an existing collection",
                 "enqueue": "put or append JSON value into an existing queue",
-                "call": "invoke an existing project callable with JSON args/kwargs",
+                "call": (
+                    "invoke any allowed callable reachable from live project state with JSON "
+                    "args/kwargs; {'$ref':'exact live path'} passes an existing live object"
+                ),
                 "intercept": (
                     "wrap an assignable existing callable. kwargs_json overrides named "
                     "arguments. value_json may contain when (argument equality map), "
@@ -109,11 +112,14 @@ class ActController:
                 "Choose converse for ordinary conversation. Choose inspect when more runtime "
                 "information is required. Choose act only for operations that advance the "
                 "request. Mark every operation effect read or write. A read-only call does "
-                "not fulfill a requested action, so continue planning from its result. For "
+                "not finish a tool turn: always continue planning from its result. Return "
+                "no operations on the following round when that evidence is sufficient for "
+                "an informational answer. For "
                 "future behavior, intercept the future consumer/call and patch its arguments "
                 "instead of changing an already-consumed value. Encode values/args/kwargs as "
                 "JSON strings. Select contextual lifetime from intent. Never state an "
-                "unverified result in reply."
+                "unverified result in reply. Do not ask for an application-specific handler "
+                "when reachable objects or the application's own APIs can perform the task."
             ),
         }
 

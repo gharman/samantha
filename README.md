@@ -59,7 +59,8 @@ In act mode, application-specific handlers and `expose()` declarations are not
 required. Samantha indexes live project modules, active project frames, globals,
 mappings, collections, classes, instances, and existing project callables. Its
 audited generic operations can inspect/search paths, assign attributes or items,
-append/enqueue values, invoke existing project callables, install fixed argument
+append/enqueue values, invoke reachable project and application-held API callables,
+pass existing live objects by reference, install fixed argument
 interceptors, and emit operator receipts. It never executes model-authored code.
 Interceptors can match named argument values and declaratively transform string
 or mapping results. They can also merge or append values inside a future call's

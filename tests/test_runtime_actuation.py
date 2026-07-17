@@ -1,4 +1,5 @@
 import io
+import json
 import queue
 import sys
 import types
@@ -19,6 +20,8 @@ def runtime_module(tmp_path: Path, monkeypatch: object) -> types.ModuleType:
     module.__file__ = str(source)
     module.config = {"topic": "general", "count": 1}
     module.requests = queue.Queue()
+    module.encode = json.dumps
+    module.danger = eval
 
     def generate(topic: str = "default") -> str:
         return topic
@@ -203,6 +206,38 @@ def test_one_shot_output_rewrite_is_specific_and_expires() -> None:
     assert rules == []
 
 
+def test_reachable_external_api_accepts_live_object_references(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    runtime_module(tmp_path, monkeypatch)
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "serialize the live configuration through the application's API",
+        [
+            {
+                "op": "call",
+                "path": "module:runtime_demo::encode",
+                "args": [{"$ref": "module:runtime_demo::config"}],
+            }
+        ],
+    )
+    assert group.results[0].verified
+    assert json.loads(group.results[0].value) == {"topic": "general", "count": 1}
+
+
+def test_explicit_execution_primitives_remain_barred(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    runtime_module(tmp_path, monkeypatch)
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "evaluate code",
+        [{"op": "call", "path": "module:runtime_demo::danger", "args": ["1+1"]}],
+    )
+    assert not group.results[0].ok
+    assert "barred execution primitive" in group.results[0].detail
+
+
 class PlannedLLM:
     def plan_action(self, messages: object) -> dict[str, object]:
         return {
@@ -240,8 +275,18 @@ def test_controller_returns_verified_receipt(
 class ResultLLM:
     def __init__(self) -> None:
         self.final_context = ""
+        self.planning_calls = 0
 
     def plan_action(self, messages: object) -> dict[str, object]:
+        self.planning_calls += 1
+        if self.planning_calls > 1:
+            return {
+                "intent": "converse",
+                "reply": "The retrieved topic is neuroevolution.",
+                "done": True,
+                "lifetime": "contextual",
+                "operations": [],
+            }
         return {
             "intent": "inspect",
             "reply": "I’ll retrieve it.",
@@ -274,9 +319,8 @@ def test_callable_result_is_synthesized_into_chat_answer(
     llm = ResultLLM()
     controller = ActController(resident(tmp_path), llm)
     reply = controller.handle("what topic was generated?")
-    assert "existing callable returned → neuroevolution" in reply
     assert "The retrieved topic is neuroevolution." in reply
-    assert '"value": "neuroevolution"' in llm.final_context
+    assert llm.planning_calls == 2
 
 
 def test_act_planner_receives_prior_chat_history(
@@ -343,7 +387,7 @@ def test_read_call_does_not_complete_an_action_request(
                 }
             )
             return {
-                "intent": "act",
+                "intent": "inspect" if self.calls == 1 else "act",
                 "reply": "",
                 "done": True,
                 "lifetime": "contextual",
