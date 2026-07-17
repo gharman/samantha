@@ -26,6 +26,9 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--state-dir")
     chat = sub.add_parser("chat")
     chat.add_argument("--pid", type=int)
+    forget = sub.add_parser("forget")
+    forget.add_argument("--claims", action="store_true")
+    forget.add_argument("--all", action="store_true")
     return root
 
 
@@ -57,6 +60,13 @@ def main(argv: list[str] | None = None) -> int:
                     print(incoming.readline().decode().strip())
                     if line == "bye": break
             except EOFError: pass
+        return 0
+    if ns.command == "forget":
+        _, key = discover_project(); state = state_root(key)
+        targets = ["claims.json"] if ns.claims else ["claims.json", "ledger.json", "baselines.json", "model.md", "goals.md"]
+        if not ns.all and not ns.claims:
+            if input("Forget samantha state? [y/N] ").lower() != "y": return 1
+        for name in targets: (state / name).unlink(missing_ok=True)
         return 0
     root, key = discover_project()
     state = state_root(key, ns.state_dir)

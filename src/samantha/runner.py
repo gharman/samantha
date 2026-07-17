@@ -25,4 +25,5 @@ def run(script: str, args: list[str], **config: object) -> int:
             events = Sentinels(resident.observer.metrics).inspect_metrics()
             for event in events:
                 resident.journal.write("observation", source="sentinel", payload={"sentinel": event.sentinel, "evidence": event.evidence})
+            resident.baselines.learn(resident.observer.metrics)
             resident.stop()

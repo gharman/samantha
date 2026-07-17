@@ -78,6 +78,13 @@ def arm(entry: str | Path | None = None, *, force: bool = False, **overrides: ob
     state = state_root(key, config.state_dir)
     journal = Journal(state)
     _resident = Resident(config, root, key, journal, state)
+    from .claims import ClaimStore
+    from .baselines import Baselines
+    _resident.claims = ClaimStore(state / "claims.json")
+    demoted = _resident.claims.validate()
+    _resident.baselines = Baselines(state / "baselines.json")
+    for claim in demoted:
+        journal.write("demotion", knob=claim, **{"from": "fact", "to": "hypothesis"}, cause="fingerprint changed")
     if not config.api_key and config.mode in {"advise", "act"} and not force:
         LOG.info("no API key; cognition dormant")
     LOG.info("resident armed (%s) · project %s…", config.mode, key[:4])

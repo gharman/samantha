@@ -16,3 +16,7 @@ Sentinels evaluate bounded metric windows and suppress a signature after its fir
 ## M3
 
 Chat uses one daemon accept thread and handles one local client at a time, which is sufficient for the single-operator protocol and keeps synchronization small. Each inbound and outbound message is journaled through the common redaction path. The runtime directory must have no group or world permissions; socket files use mode 0600 and are removed on orderly shutdown.
+
+## M4
+
+Claims store the source path, optional enclosing function, and AST-derived fingerprint together. Validation demotes stale facts in place rather than deleting their history. Baselines retain compact envelopes and a conservative semantic direction; they are refreshed at orderly runner shutdown. Forget removes only state snapshots and intentionally preserves append-only journals unless an exported state directory is removed by the operator.
