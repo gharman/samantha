@@ -22,6 +22,8 @@ class Cognition:
         self.warned = False
         self.provider_ready: bool | None = None
         self.provider_error: str | None = None
+        self.analysis_ready: bool | None = None
+        self.analysis_error: str | None = None
 
     def start(self) -> None:
         threading.Thread(
@@ -35,16 +37,27 @@ class Cognition:
             check = getattr(self.llm, "check", None)
             if check:
                 check()
-            self._bootstrap()
             self.provider_ready = True
-            logging.getLogger("samantha").info(
-                "cognition ready · model=%s", self.resident.config.model
-            )
         except Exception as exc:
             self.provider_ready = False
             self.provider_error = str(exc)
             logging.getLogger("samantha").warning(
                 "cognition unavailable at startup: %s", exc
+            )
+            return
+        logging.getLogger("samantha").info(
+            "provider ready · model=%s · analyzing project source",
+            self.resident.config.model,
+        )
+        try:
+            self._bootstrap()
+            self.analysis_ready = True
+            logging.getLogger("samantha").info("cold-start analysis ready")
+        except Exception as exc:
+            self.analysis_ready = False
+            self.analysis_error = str(exc)
+            logging.getLogger("samantha").warning(
+                "cold-start analysis failed (provider remains available): %s", exc
             )
 
     def _bootstrap(self) -> None:
@@ -218,6 +231,9 @@ Analyzed {len(inventory.get("files", {}))} project files.
             "mode": self.resident.config.mode,
             "model": (self.resident.state / "model.md").read_text(errors="replace"),
             "recent_evidence": self._recent_journal(),
+            "cold_start_analysis": (
+                "ready" if self.analysis_ready else f"incomplete: {self.analysis_error}"
+            ),
         }
         try:
             response = self.llm.complete(
@@ -233,8 +249,6 @@ Analyzed {len(inventory.get("files", {}))} project files.
                 "chat",
             )
         except Exception as exc:
-            self.provider_ready = False
-            self.provider_error = str(exc)
             logging.getLogger("samantha").warning("chat cognition failed: %s", exc)
             return f"Model request failed: {exc}"
         return str(

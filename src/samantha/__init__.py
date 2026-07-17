@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,9 +76,26 @@ def _invoked_as_cli() -> bool:
     return Path(sys.argv[0]).name in {"samantha", "samantha.exe", "__main__.py"}
 
 
+def _application_entry() -> str | None:
+    """Prefer the importing application frame over a generated console shim."""
+    package = Path(__file__).resolve().parent
+    cwd = Path.cwd().resolve()
+    for frame in inspect.stack()[1:]:
+        candidate = Path(frame.filename).resolve()
+        parts = set(candidate.parts)
+        if not candidate.is_file() or package in candidate.parents:
+            continue
+        if {".venv", "venv", "site-packages"} & parts:
+            continue
+        if candidate == cwd or cwd in candidate.parents:
+            return str(candidate)
+    if sys.argv and Path(sys.argv[0]).is_file():
+        return sys.argv[0]
+    return None
+
+
 if os.getenv("SAMANTHA") != "off" and not _invoked_as_cli():
     try:
-        entry = sys.argv[0] if sys.argv and Path(sys.argv[0]).is_file() else None
-        arm(entry)
+        arm(_application_entry())
     except Exception:  # Importing samantha must never break the host.
         pass

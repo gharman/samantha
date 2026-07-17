@@ -25,8 +25,11 @@ class FakeLLM:
 
 
 class OpenAILLM:
-    def __init__(self, api_key: str, model: str, base_url: str) -> None:
+    def __init__(
+        self, api_key: str, model: str, base_url: str, timeout: float = 120.0
+    ) -> None:
         self.api_key, self.model, self.base_url = api_key, model, base_url.rstrip("/")
+        self.timeout = timeout
 
     def complete(
         self, messages: list[dict[str, str]], signature: str = "default"
@@ -35,7 +38,7 @@ class OpenAILLM:
 
         response = httpx.post(
             f"{self.base_url}/v1/responses",
-            timeout=30,
+            timeout=self.timeout,
             headers={"Authorization": f"Bearer {self.api_key}"},
             json={
                 "model": self.model,
@@ -66,7 +69,7 @@ class OpenAILLM:
 
         response = httpx.get(
             f"{self.base_url}/v1/models/{self.model}",
-            timeout=15,
+            timeout=min(self.timeout, 30),
             headers={"Authorization": f"Bearer {self.api_key}"},
         )
         if response.is_error:

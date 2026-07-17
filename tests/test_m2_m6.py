@@ -86,6 +86,25 @@ def test_cold_start_builds_specific_program_theory(tmp_path: Path) -> None:
     assert "queue lag" in model
 
 
+def test_analysis_timeout_does_not_disable_provider_or_chat(tmp_path: Path) -> None:
+    class SlowLLM:
+        def check(self) -> None:
+            pass
+
+        def complete(self, messages: object, signature: str) -> object:
+            raise TimeoutError("read timed out")
+
+    resident = fake_resident(tmp_path)
+    save_json(tmp_path / "source-inventory.json", {"files": {"app.py": {}}})
+    (tmp_path / "model.md").write_text("Initial deterministic inventory")
+    cognition = Cognition(resident, SlowLLM())
+    cognition._check_provider()
+    assert cognition.provider_ready is True
+    assert cognition.analysis_ready is False
+    assert cognition.chat("What do you know?") == "Model request failed: read timed out"
+    assert cognition.provider_ready is True
+
+
 def test_claim_demotion(tmp_path: Path) -> None:
     source = tmp_path / "code.py"
     source.write_text("def train():\n    return 1\n")

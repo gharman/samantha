@@ -30,6 +30,10 @@ persistent program theory, architecture map, inferred goals, specific watch
 plan, knob candidates, protected areas, and explicit ambiguities before chat is
 considered ready.
 
+Cold-start analysis uses a separate 120-second read timeout, configurable with
+`SAMANTHA_LLM_TIMEOUT`. A theory-building timeout does not mark the provider or
+chat unavailable; it is reported as a retryable analysis failure.
+
 State is stored under `~/.samantha/<project-id>/`, never in the observed project.
 The directory is created during import with user-only permissions. Set
 `SAMANTHA_STATE_DIR` to override the base directory for tests or custom deployments.

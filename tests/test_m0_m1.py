@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from samantha._boot import Config
+from samantha import _application_entry
 from samantha.identity import fingerprint
 from samantha.observe.census import census
 from samantha.observe.hotread import CountingDict
@@ -90,3 +91,9 @@ def test_default_memory_is_dot_samantha(tmp_path: Path, monkeypatch: object) -> 
     assert path == tmp_path / ".samantha" / "project-key"
     assert path.is_dir()
     assert path.parent.stat().st_mode & 0o077 == 0
+
+
+def test_application_entry_ignores_virtual_environment_shims() -> None:
+    entry = Path(_application_entry() or "")
+    assert entry.name == "test_m0_m1.py"
+    assert ".venv" not in entry.parts

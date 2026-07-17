@@ -24,7 +24,7 @@ IGNORED_DIRS = {
 }
 
 
-def read_source(path: Path, root: Path, budget: int = 500_000) -> dict[str, Any]:
+def read_source(path: Path, root: Path, budget: int = 180_000) -> dict[str, Any]:
     """Read entry/imported code first, then the remaining project Python surface."""
     entry = path.resolve()
     root = root.resolve()

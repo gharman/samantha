@@ -27,6 +27,7 @@ class Config:
     token_budget_per_day: int = 2_000_000
     flag_budget: int = 3
     dotenv_file: str | None = None
+    llm_timeout: float = 120.0
 
     @classmethod
     def resolve(cls, **overrides: object) -> "Config":
@@ -45,6 +46,7 @@ class Config:
             ),
             flag_budget=int(os.getenv("SAMANTHA_FLAG_BUDGET", "3")),
             dotenv_file=str(dotenv_file) if dotenv_file else None,
+            llm_timeout=float(os.getenv("SAMANTHA_LLM_TIMEOUT", "120")),
         )
         values.update({k: v for k, v in overrides.items() if v is not None})
         if values["mode"] not in {"off", "observe", "advise", "act"}:
@@ -209,6 +211,7 @@ def _start_runtime(current: Resident) -> None:
                     current.config.api_key,
                     current.config.model,
                     current.config.base_url,
+                    current.config.llm_timeout,
                 ),
             )
             current.cognition.start()
