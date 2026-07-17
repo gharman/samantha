@@ -215,23 +215,28 @@ class RuntimeOperator:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             nonlocal restored
             bound = signature.bind_partial(*args, **kwargs)
-            for name, value in overrides.items():
-                if name in signature.parameters:
-                    bound.arguments[name] = value
-                else:
-                    accepts_kwargs = any(
-                        parameter.kind is inspect.Parameter.VAR_KEYWORD
-                        for parameter in signature.parameters.values()
-                    )
-                    if not accepts_kwargs:
-                        raise TypeError(f"callable has no argument named {name}")
-                    kwargs[name] = value
-            if lifetime == "one_shot" and not restored:
+            condition = metadata.get("when", {}) if isinstance(metadata, dict) else {}
+            matches = _matches(bound.arguments, condition)
+            if matches:
+                for name, value in overrides.items():
+                    if name in signature.parameters:
+                        bound.arguments[name] = value
+                    else:
+                        accepts_kwargs = any(
+                            parameter.kind is inspect.Parameter.VAR_KEYWORD
+                            for parameter in signature.parameters.values()
+                        )
+                        if not accepts_kwargs:
+                            raise TypeError(f"callable has no argument named {name}")
+                        kwargs[name] = value
+            if matches and lifetime == "one_shot" and not restored:
                 node.write(original)
                 restored = True
             result = original(*bound.args, **bound.kwargs, **kwargs)
+            if matches and isinstance(metadata, dict):
+                result = _transform_result(result, metadata)
             receipt = metadata.get("receipt") if isinstance(metadata, dict) else None
-            if receipt:
+            if matches and receipt:
                 logging.getLogger("samantha").info(
                     "operator receipt: %s",
                     str(receipt).replace("{result}", str(result)),
@@ -290,3 +295,20 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value[:100]]
     return _preview(value)
+
+
+def _matches(arguments: dict[str, Any], condition: Any) -> bool:
+    if not isinstance(condition, dict) or not condition:
+        return True
+    return all(arguments.get(name) == expected for name, expected in condition.items())
+
+
+def _transform_result(result: Any, metadata: dict[str, Any]) -> Any:
+    replacements = metadata.get("result_replace", {})
+    if isinstance(result, str) and isinstance(replacements, dict):
+        for old, new in replacements.items():
+            result = result.replace(str(old), str(new))
+    updates = metadata.get("result_update", {})
+    if isinstance(result, dict) and isinstance(updates, dict):
+        result = {**result, **updates}
+    return result

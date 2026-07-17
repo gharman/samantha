@@ -50,7 +50,13 @@ class ActController:
                 for result in group.results
             )
             if mutated:
-                return self._receipt(group, str(plan.get("reply") or ""))
+                receipt = self._receipt(group, "")
+                answer = self._final_answer(
+                    operator_text,
+                    group,
+                    str(plan.get("reply") or ""),
+                )
+                return f"{receipt}\n\n{answer}" if answer else receipt
         return "I inspected the runtime but could not form a verified action plan."
 
     def _context(
@@ -77,8 +83,11 @@ class ActController:
                 "enqueue": "put or append JSON value into an existing queue",
                 "call": "invoke an existing project callable with JSON args/kwargs",
                 "intercept": (
-                    "wrap an assignable existing callable and override named arguments; "
-                    "one_shot restores on first invocation, process persists"
+                    "wrap an assignable existing callable. kwargs_json overrides named "
+                    "arguments. value_json may contain when (argument equality map), "
+                    "result_replace (string replacement map), result_update (mapping merge), "
+                    "and receipt. one_shot restores after the first matching invocation; "
+                    "process persists"
                 ),
                 "emit": "write an operator-visible receipt through Samantha's host logger",
             },
@@ -86,6 +95,7 @@ class ActController:
             "source_structure": self._source_structure(),
             "live_paths": inventory,
             "prior_tool_results": transcript,
+            "recent_chat": self._recent_chat(),
             "instructions": (
                 "Choose converse for ordinary conversation. Choose inspect when more runtime "
                 "information is required. Choose act only for operations that advance the "
@@ -93,6 +103,57 @@ class ActController:
                 "lifetime from intent. Never state an unverified result in reply."
             ),
         }
+
+    def _final_answer(
+        self, operator_text: str, group: InterventionGroup, planned_reply: str
+    ) -> str:
+        converse = getattr(self.llm, "chat", None)
+        if not converse:
+            return planned_reply
+        context = {
+            "operator_request": operator_text,
+            "planned_reply_before_tools": planned_reply,
+            "verified_tool_results": [result.as_dict() for result in group.results],
+            "recent_process_activity_after_tools": self._recent_activity(),
+            "recent_chat": self._recent_chat(),
+            "project_theory": self._project_theory(),
+        }
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Answer the operator's request now, using the verified tool results and "
+                    "new process output below. Do not promise a future retrieval that already "
+                    "ran. If a callable printed its result and returned null, use the captured "
+                    "process output. State clearly what the result establishes and what remains "
+                    "unknown. Never claim an unverified action.\n" + json.dumps(context)
+                ),
+            }
+        ]
+        try:
+            return str(converse(messages))
+        except Exception as exc:
+            logging.getLogger("samantha").warning(
+                "post-action synthesis failed: %s", exc
+            )
+            return planned_reply or f"Post-action explanation failed: {exc}"
+
+    def _recent_activity(self) -> list[dict[str, Any]]:
+        observer = getattr(self.resident, "observer", None)
+        if observer and hasattr(observer, "recent_snapshot"):
+            return observer.recent_snapshot()
+        return []
+
+    def _recent_chat(self, limit: int = 30) -> list[dict[str, Any]]:
+        rows = []
+        try:
+            for line in self.resident.journal.path.read_text().splitlines():
+                row = json.loads(line)
+                if row.get("type") == "chat":
+                    rows.append(row)
+        except (OSError, json.JSONDecodeError):
+            pass
+        return rows[-limit:]
 
     def _project_theory(self) -> str:
         try:
@@ -135,7 +196,8 @@ class ActController:
         lines = [f"Applied runtime intervention {group.id} ({group.lifetime}):"]
         for result in group.results:
             marker = "✓" if result.ok and result.verified else "•" if result.ok else "✗"
-            lines.append(f"{marker} {result.op} {result.path}: {result.detail}")
+            value = "" if result.value is None else f" → {result.as_dict()['value']}"
+            lines.append(f"{marker} {result.op} {result.path}: {result.detail}{value}")
         if reply:
             lines.extend(["", reply])
         return "\n".join(lines)

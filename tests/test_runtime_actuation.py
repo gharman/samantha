@@ -23,6 +23,12 @@ def runtime_module(tmp_path: Path, monkeypatch: object) -> types.ModuleType:
 
     generate.__module__ = module.__name__
     module.generate = generate
+
+    def render(stage: str, value: str) -> str:
+        return f"# {stage.title()}\n{value}"
+
+    render.__module__ = module.__name__
+    module.render = render
     monkeypatch.setitem(sys.modules, module.__name__, module)
     return module
 
@@ -107,6 +113,32 @@ def test_process_mutation_can_be_reverted(tmp_path: Path, monkeypatch: object) -
     assert module.config["topic"] == "general"
 
 
+def test_conditional_result_transform_changes_only_matching_calls(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "rename only the steelman heading",
+        [
+            {
+                "op": "intercept",
+                "path": "module:runtime_demo::render",
+                "kwargs": {},
+                "value": {
+                    "when": {"stage": "steelman"},
+                    "result_replace": {"Steelman": "Steelman for Greg"},
+                },
+                "lifetime": "process",
+            }
+        ],
+        "process",
+    )
+    assert group.results[0].verified
+    assert module.render("steelman", "case") == "# Steelman for Greg\ncase"
+    assert module.render("critique", "case") == "# Critique\ncase"
+
+
 class PlannedLLM:
     def plan_action(self, messages: object) -> dict[str, object]:
         return {
@@ -138,3 +170,72 @@ def test_controller_returns_verified_receipt(
     assert module.config["topic"] == "neuroevolutionary AI"
     assert "Applied runtime intervention" in reply
     assert "assignment verified" in reply
+
+
+class ResultLLM:
+    def __init__(self) -> None:
+        self.final_context = ""
+
+    def plan_action(self, messages: object) -> dict[str, object]:
+        return {
+            "intent": "act",
+            "reply": "I’ll retrieve it.",
+            "done": True,
+            "lifetime": "one_shot",
+            "operations": [
+                {
+                    "op": "call",
+                    "path": "module:runtime_demo::generate",
+                    "query": None,
+                    "value_json": None,
+                    "args_json": None,
+                    "kwargs_json": '{"topic":"neuroevolution"}',
+                    "lifetime": "one_shot",
+                    "reason": "retrieve generated content",
+                }
+            ],
+        }
+
+    def chat(self, messages: list[dict[str, str]]) -> str:
+        self.final_context = messages[0]["content"]
+        return "The retrieved topic is neuroevolution."
+
+
+def test_callable_result_is_synthesized_into_chat_answer(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    runtime_module(tmp_path, monkeypatch)
+    llm = ResultLLM()
+    controller = ActController(resident(tmp_path), llm)
+    reply = controller.handle("what topic was generated?")
+    assert "existing callable returned → neuroevolution" in reply
+    assert "The retrieved topic is neuroevolution." in reply
+    assert '"value": "neuroevolution"' in llm.final_context
+
+
+def test_act_planner_receives_prior_chat_history(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    runtime_module(tmp_path, monkeypatch)
+    current = resident(tmp_path)
+    current.journal.write("chat", direction="in", text="assess idea 41")
+    current.journal.write("chat", direction="out", text="retrieving idea 41")
+
+    class HistoryLLM:
+        context = ""
+
+        def plan_action(self, messages: list[dict[str, str]]) -> dict[str, object]:
+            self.context = messages[0]["content"]
+            return {
+                "intent": "converse",
+                "reply": "Idea 41 is still the active subject.",
+                "done": True,
+                "lifetime": "contextual",
+                "operations": [],
+            }
+
+    llm = HistoryLLM()
+    reply = ActController(current, llm).handle("ok, and?")
+    assert reply == "Idea 41 is still the active subject."
+    assert "assess idea 41" in llm.context
+    assert "retrieving idea 41" in llm.context

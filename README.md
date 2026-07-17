@@ -55,12 +55,21 @@ mappings, collections, classes, instances, and existing project callables. Its
 audited generic operations can inspect/search paths, assign attributes or items,
 append/enqueue values, invoke existing project callables, install fixed argument
 interceptors, and emit operator receipts. It never executes model-authored code.
+Interceptors can match named argument values and declaratively transform string
+or mapping results, enabling narrow presentation/runtime changes without source
+editing or unconditional relabeling.
 
 Related operations form an intervention group with an inferred `one_shot`,
 `temporary`, `process`, `until_failure`, or contextual lifetime. Successful
 changes remain when that lifetime calls for it; retained inverse assignments
 support rollback. Multiple related changes may be applied together, while
 conflicting changes to the same path are rejected.
+
+After a callable or mutation runs, Samantha performs a post-tool response pass
+over verified return values and newly captured host output. Intervention receipts
+therefore include the result and answer the operator’s original question rather
+than merely promising a later retrieval. Act planning also includes recent chat
+history so follow-ups retain their subject.
 
 Operator intent can be supplied by `SAMANTHA_GOAL`, `samantha.goal()`, chat, or
 read-only source comments:
