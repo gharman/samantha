@@ -185,9 +185,11 @@ Analyzed {len(inventory.get("files", {}))} project files.
             self.wakes.popleft()
         cfg = self.resident.config
         if (
-            len(self.wakes) >= cfg.max_wakes_per_hour
-            or self.tokens >= cfg.token_budget_per_day
-            or len(self.open_flags) >= cfg.flag_budget
+            (cfg.max_wakes_per_hour > 0 and len(self.wakes) >= cfg.max_wakes_per_hour)
+            or (
+                cfg.token_budget_per_day > 0 and self.tokens >= cfg.token_budget_per_day
+            )
+            or (cfg.flag_budget > 0 and len(self.open_flags) >= cfg.flag_budget)
         ):
             if not self.warned:
                 logging.getLogger("samantha").warning("cognition budget exhausted")

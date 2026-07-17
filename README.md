@@ -30,9 +30,10 @@ persistent program theory, architecture map, inferred goals, specific watch
 plan, knob candidates, protected areas, and explicit ambiguities before chat is
 considered ready.
 
-Cold-start analysis uses a separate 120-second read timeout, configurable with
-`SAMANTHA_LLM_TIMEOUT`. A theory-building timeout does not mark the provider or
-chat unavailable; it is reported as a retryable analysis failure.
+Cold-start analysis and chat have no response timeout by default. Set
+`SAMANTHA_LLM_TIMEOUT` to a positive number of seconds if a deployment needs a
+limit. A theory-building timeout does not mark the provider or chat unavailable;
+it is reported as a retryable analysis failure.
 
 While deeper analysis is pending or has failed, chat returns an immediate source
 briefing built from AST outlines, docstrings, CLI help, imports, directives, and
@@ -55,6 +56,11 @@ Modes are `off`, `observe`, `advise` (default), and `act`. Actuation additionall
 requires an explicit `SAMANTHA=act` in the host process. No API key is needed for
 observe mode or tests.
 
+Samantha's cognition and act-planning loops are unbudgeted by default. Optional
+positive limits can be set with `SAMANTHA_ACT_MAX_ROUNDS`,
+`SAMANTHA_MAX_WAKES_PER_HOUR`, `SAMANTHA_TOKEN_BUDGET_PER_DAY`, and
+`SAMANTHA_FLAG_BUDGET`; zero means unlimited for each setting.
+
 In act mode, application-specific handlers and `expose()` declarations are not
 required. Samantha indexes live project modules, active project frames, globals,
 mappings, collections, classes, instances, and existing project callables. Its
@@ -68,6 +74,9 @@ mapping arguments, so a one-shot generation constraint is attached where it will
 actually be consumed instead of being added to an already-running batch. Audited
 stdout/stderr rewrite rules support narrow future presentation changes such as a
 single phase label without modifying source or requiring an application handler.
+An interceptor can activate an output rewrite only when its matching future call
+occurs, coupling a deferred state change and its presentation rather than racing
+independent “next event” rules against already-queued work.
 
 Related operations form an intervention group with an inferred `one_shot`,
 `temporary`, `process`, `until_failure`, or contextual lifetime. Successful

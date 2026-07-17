@@ -222,9 +222,10 @@ class RuntimeOperator:
         lifetime = operation.get("lifetime") or group.lifetime
         signature = inspect.signature(original)
         restored = False
+        output_rewrite_activated = False
 
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            nonlocal restored
+            nonlocal output_rewrite_activated, restored
             bound = signature.bind_partial(*args, **kwargs)
             condition = metadata.get("when", {}) if isinstance(metadata, dict) else {}
             matches = _matches(bound.arguments, condition)
@@ -247,6 +248,18 @@ class RuntimeOperator:
                         extras = dict(bound.arguments.get(var_keyword, {}))
                         extras[name] = value
                         bound.arguments[var_keyword] = extras
+                rewrite = metadata.get("activate_output_rewrite")
+                if isinstance(rewrite, dict) and not output_rewrite_activated:
+                    observer = getattr(self.resident, "observer", None)
+                    if not observer or not hasattr(observer, "add_output_rewrite"):
+                        raise RuntimeError("output observation is unavailable")
+                    observer.add_output_rewrite(
+                        str(rewrite["match"]),
+                        str(rewrite.get("replace", "")),
+                        rewrite.get("source"),
+                        str(rewrite.get("lifetime", "one_shot")),
+                    )
+                    output_rewrite_activated = True
             if matches and lifetime == "one_shot" and not restored:
                 node.write(original)
                 restored = True

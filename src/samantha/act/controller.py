@@ -22,7 +22,9 @@ class ActController:
         if not planner:
             return self._plain_fallback(operator_text)
         transcript: list[dict[str, Any]] = []
-        for round_number in range(8):
+        round_number = 0
+        max_rounds = int(getattr(self.resident.config, "act_max_rounds", 0))
+        while max_rounds <= 0 or round_number < max_rounds:
             context = self._context(operator_text, transcript, round_number)
             try:
                 plan = planner([{"role": "user", "content": json.dumps(context)}])
@@ -57,7 +59,11 @@ class ActController:
                     str(plan.get("reply") or ""),
                 )
                 return f"{receipt}\n\n{answer}" if answer else receipt
-        return "I exhausted the runtime inspection budget without applying a verified action."
+            round_number += 1
+        return (
+            f"I reached the configured runtime inspection limit ({max_rounds}) without "
+            "applying a verified action."
+        )
 
     def _context(
         self, operator_text: str, transcript: list[dict[str, Any]], round_number: int
@@ -94,7 +100,8 @@ class ActController:
                     "argument_update (argument-name to mapping merge), argument_append "
                     "(argument-name to field/value append map), result_replace (string "
                     "replacement map), result_update (mapping merge), "
-                    "and receipt. one_shot restores after the first matching invocation; "
+                    "activate_output_rewrite (a future output rewrite specification), and "
+                    "receipt. one_shot restores after the first matching invocation; "
                     "process persists"
                 ),
                 "rewrite_output": (
@@ -119,7 +126,10 @@ class ActController:
                 "instead of changing an already-consumed value. Encode values/args/kwargs as "
                 "JSON strings. Select contextual lifetime from intent. Never state an "
                 "unverified result in reply. Do not ask for an application-specific handler "
-                "when reachable objects or the application's own APIs can perform the task."
+                "when reachable objects or the application's own APIs can perform the task. "
+                "For coupled future changes, activate presentation rewrites from the same "
+                "future-call interceptor instead of installing independent next-event rules. "
+                "Use source null for output rewrites unless the stream is verified."
             ),
         }
 
@@ -136,6 +146,10 @@ class ActController:
             "recent_process_activity_after_tools": self._recent_activity(),
             "recent_chat": self._recent_chat(),
             "project_theory": self._project_theory(),
+            "verification_rule": (
+                "Distinguish installed future behavior from an observed outcome. Resumed or "
+                "already-queued work is unaffected unless the operation explicitly changes it."
+            ),
         }
         messages = [
             {

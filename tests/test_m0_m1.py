@@ -77,6 +77,25 @@ def test_quiet_environment_disables_resident_console_logging(
     assert config.log_level == "OFF"
 
 
+def test_cognition_and_actuation_are_unbudgeted_by_default(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    for name in (
+        "SAMANTHA_LLM_TIMEOUT",
+        "SAMANTHA_ACT_MAX_ROUNDS",
+        "SAMANTHA_MAX_WAKES_PER_HOUR",
+        "SAMANTHA_TOKEN_BUDGET_PER_DAY",
+        "SAMANTHA_FLAG_BUDGET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.llm_timeout == 0
+    assert config.act_max_rounds == 0
+    assert config.max_wakes_per_hour == 0
+    assert config.token_budget_per_day == 0
+    assert config.flag_budget == 0
+
+
 def test_source_inventory_follows_local_imports_and_comments(tmp_path: Path) -> None:
     package = tmp_path / "src" / "demo"
     package.mkdir(parents=True)

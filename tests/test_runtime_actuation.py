@@ -155,7 +155,14 @@ def test_one_shot_interceptor_patches_future_matching_payload(
 ) -> None:
     module = runtime_module(tmp_path, monkeypatch)
     original = module.route
-    operator = RuntimeOperator(resident(tmp_path))
+    current = resident(tmp_path)
+    activated: list[dict[str, object]] = []
+    current.observer = SimpleNamespace(
+        add_output_rewrite=lambda match, replace, source, lifetime: activated.append(
+            {"match": match, "replace": replace, "source": source, "lifetime": lifetime}
+        )
+    )
+    operator = RuntimeOperator(current)
     group = operator.execute(
         "make the next generated item about puppies",
         [
@@ -167,6 +174,12 @@ def test_one_shot_interceptor_patches_future_matching_payload(
                     "argument_append": {
                         "payload": {"constraints": "The idea must be about puppies."}
                     },
+                    "activate_output_rewrite": {
+                        "match": "steelman",
+                        "replace": "greg is the STEEL MAN",
+                        "source": None,
+                        "lifetime": "one_shot",
+                    },
                 },
                 "lifetime": "one_shot",
             }
@@ -177,11 +190,20 @@ def test_one_shot_interceptor_patches_future_matching_payload(
     assert module.route("steelman", {"constraints": ["buildable"]}) == {
         "constraints": ["buildable"]
     }
+    assert activated == []
     assert module.route is not original
     assert module.route("generate", {"constraints": ["buildable"]}) == {
         "constraints": ["buildable", "The idea must be about puppies."]
     }
     assert module.route is original
+    assert activated == [
+        {
+            "match": "steelman",
+            "replace": "greg is the STEEL MAN",
+            "source": None,
+            "lifetime": "one_shot",
+        }
+    ]
 
 
 def test_one_shot_output_rewrite_is_specific_and_expires() -> None:
@@ -373,7 +395,7 @@ def test_read_call_does_not_complete_an_action_request(
                     "lifetime": "contextual",
                     "reason": "inspect behavior",
                 }
-                if self.calls == 1
+                if self.calls < 10
                 else {
                     "op": "set",
                     "effect": "write",
@@ -387,7 +409,7 @@ def test_read_call_does_not_complete_an_action_request(
                 }
             )
             return {
-                "intent": "inspect" if self.calls == 1 else "act",
+                "intent": "inspect" if self.calls < 10 else "act",
                 "reply": "",
                 "done": True,
                 "lifetime": "contextual",
@@ -396,6 +418,6 @@ def test_read_call_does_not_complete_an_action_request(
 
     llm = InspectThenActLLM()
     reply = ActController(resident(tmp_path), llm).handle("make it puppies")
-    assert llm.calls == 2
+    assert llm.calls == 10
     assert module.config["topic"] == "puppies"
     assert "assignment verified" in reply

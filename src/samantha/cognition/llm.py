@@ -49,7 +49,7 @@ class OpenAILLM:
             body["text"] = {"format": _cold_start_format()}
         response = httpx.post(
             f"{self.base_url}/v1/responses",
-            timeout=self.timeout,
+            timeout=self.timeout or None,
             headers={"Authorization": f"Bearer {self.api_key}"},
             json=body,
         )
@@ -74,7 +74,7 @@ class OpenAILLM:
 
         response = httpx.post(
             f"{self.base_url}/v1/responses",
-            timeout=self.timeout,
+            timeout=self.timeout or None,
             headers={"Authorization": f"Bearer {self.api_key}"},
             json={
                 "model": self.model,
@@ -99,7 +99,7 @@ class OpenAILLM:
 
         response = httpx.post(
             f"{self.base_url}/v1/responses",
-            timeout=self.timeout,
+            timeout=self.timeout or None,
             headers={"Authorization": f"Bearer {self.api_key}"},
             json={
                 "model": self.model,
@@ -124,7 +124,7 @@ class OpenAILLM:
 
         response = httpx.get(
             f"{self.base_url}/v1/models/{self.model}",
-            timeout=min(self.timeout, 30),
+            timeout=min(self.timeout, 30) if self.timeout > 0 else 30,
             headers={"Authorization": f"Bearer {self.api_key}"},
         )
         if response.is_error:

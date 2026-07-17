@@ -23,11 +23,12 @@ class Config:
     base_url: str = "https://api.openai.com"
     api_key: str | None = None
     state_dir: str | None = None
-    max_wakes_per_hour: int = 6
-    token_budget_per_day: int = 2_000_000
-    flag_budget: int = 3
+    max_wakes_per_hour: int = 0
+    token_budget_per_day: int = 0
+    flag_budget: int = 0
     dotenv_file: str | None = None
-    llm_timeout: float = 120.0
+    llm_timeout: float = 0.0
+    act_max_rounds: int = 0
     log_level: str = "INFO"
 
     @classmethod
@@ -41,13 +42,12 @@ class Config:
             base_url=os.getenv("SAMANTHA_BASE_URL", "https://api.openai.com"),
             api_key=os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
             state_dir=os.getenv("SAMANTHA_STATE_DIR"),
-            max_wakes_per_hour=int(os.getenv("SAMANTHA_MAX_WAKES_PER_HOUR", "6")),
-            token_budget_per_day=int(
-                os.getenv("SAMANTHA_TOKEN_BUDGET_PER_DAY", "2000000")
-            ),
-            flag_budget=int(os.getenv("SAMANTHA_FLAG_BUDGET", "3")),
+            max_wakes_per_hour=int(os.getenv("SAMANTHA_MAX_WAKES_PER_HOUR", "0")),
+            token_budget_per_day=int(os.getenv("SAMANTHA_TOKEN_BUDGET_PER_DAY", "0")),
+            flag_budget=int(os.getenv("SAMANTHA_FLAG_BUDGET", "0")),
             dotenv_file=str(dotenv_file) if dotenv_file else None,
-            llm_timeout=float(os.getenv("SAMANTHA_LLM_TIMEOUT", "120")),
+            llm_timeout=float(os.getenv("SAMANTHA_LLM_TIMEOUT", "0")),
+            act_max_rounds=int(os.getenv("SAMANTHA_ACT_MAX_ROUNDS", "0")),
             log_level=(
                 "OFF"
                 if _truthy(os.getenv("SAMANTHA_QUIET"))
