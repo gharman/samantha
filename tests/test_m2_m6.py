@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from samantha.act.ledger import Ledger
 from samantha.claims import ClaimStore
 from samantha.cognition.harness import Cognition
-from samantha.cognition.llm import FakeLLM, _output_text
+from samantha.cognition.llm import FakeLLM, _cold_start_format, _output_text
 from samantha.report import generate
 from samantha.sentinels import WakeEvent
 from samantha.state import Journal, save_json
@@ -156,6 +156,31 @@ def test_responses_parser_skips_reasoning_items() -> None:
         ],
     }
     assert _output_text(payload) == '{"answer":"ready"}'
+
+
+def test_cold_start_uses_strict_structured_output() -> None:
+    output = _cold_start_format()
+    assert output["type"] == "json_schema"
+    assert output["strict"] is True
+    assert output["schema"]["additionalProperties"] is False
+    assert "watching" in output["schema"]["required"]
+
+
+def test_chat_can_be_ordinary_conversation(tmp_path: Path) -> None:
+    resident = fake_resident(tmp_path)
+    save_json(
+        tmp_path / "source-inventory.json",
+        {"entry": "app.py", "files": {"app.py": {"docstring": "A demo."}}},
+    )
+    cognition = Cognition(
+        resident,
+        FakeLLM({"chat": {"answer": "Why did the daemon cross the event loop?"}}),
+    )
+    cognition.provider_ready = True
+    cognition.analysis_ready = False
+    assert (
+        cognition.chat("Tell me a joke") == "Why did the daemon cross the event loop?"
+    )
 
 
 def test_claim_demotion(tmp_path: Path) -> None:

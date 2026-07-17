@@ -66,4 +66,9 @@ samantha --list      # lists resident process IDs
 samantha --pid 1234  # selects a resident explicitly
 ```
 
+The interactive client supports up/down-arrow history through `readline` and
+persists the last 1,000 prompts in `~/.samantha/cli-history` with mode 0600.
+Chat is a normal plain-text model conversation even while deeper source analysis
+is incomplete; structured JSON is reserved for internal cognition actions.
+
 Windows is currently untested.

@@ -56,3 +56,7 @@ Cold-start model input is compacted to a project-wide digest of AST outlines, do
 ## Responses parsing and conversational fallback correction
 
 Raw Responses API payloads are no longer assumed to place message text in the first output item. The parser walks every output item and content block, skipping reasoning and tool records, recognizing refusals, and reporting incomplete/no-text states explicitly. When cold-start analysis is pending or failed, the deterministic inventory briefing becomes context for a normal model chat call together with the current operator message, prior chat events, and recent process activity. It is rendered directly only when the chat request itself fails, preserving a genuine conversation throughout initialization.
+
+## Structured cognition and conversational CLI correction
+
+Cold-start analysis now uses a strict Responses API JSON schema with a required summary and string arrays for architecture, goals, watching, knob candidates, protected areas, and ambiguities; prompt-only JSON formatting is no longer trusted. Operator chat uses a separate unconstrained text response path, so ordinary conversation is preserved and never parsed as a cognition action object. The CLI loads platform `readline` support and persists up to 1,000 prompts at `~/.samantha/cli-history` with mode 0600, providing arrow-key recall across sessions.

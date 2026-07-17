@@ -23,6 +23,10 @@ class FakeLLM:
             self.scripts.get("default", {"assessment": "healthy", "actions": []}),
         )
 
+    def chat(self, messages: list[dict[str, str]]) -> str:
+        response = self.complete(messages, "chat")
+        return str(response.get("answer") or response.get("assessment") or response)
+
 
 class OpenAILLM:
     def __init__(
@@ -36,15 +40,18 @@ class OpenAILLM:
     ) -> dict[str, Any]:
         import httpx
 
+        body: dict[str, Any] = {
+            "model": self.model,
+            "input": messages,
+            "instructions": "Return a single valid JSON object and no markdown.",
+        }
+        if signature == "cold_start":
+            body["text"] = {"format": _cold_start_format()}
         response = httpx.post(
             f"{self.base_url}/v1/responses",
             timeout=self.timeout,
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json={
-                "model": self.model,
-                "input": messages,
-                "instructions": "Return a single valid JSON object and no markdown.",
-            },
+            json=body,
         )
         if response.is_error:
             detail = _error_detail(response)
@@ -60,6 +67,31 @@ class OpenAILLM:
             if match:
                 return json.loads(match.group())
             return {"assessment": text, "answer": text, "actions": []}
+
+    def chat(self, messages: list[dict[str, str]]) -> str:
+        """Return unconstrained conversational text rather than structured actions."""
+        import httpx
+
+        response = httpx.post(
+            f"{self.base_url}/v1/responses",
+            timeout=self.timeout,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": self.model,
+                "input": messages,
+                "instructions": (
+                    "You are Samantha, the resident intelligence in this program. "
+                    "Respond naturally and directly to the operator. You can have an "
+                    "ordinary conversation as well as discuss the supplied project context."
+                ),
+            },
+        )
+        if response.is_error:
+            raise RuntimeError(
+                f"OpenAI API returned HTTP {response.status_code}: "
+                f"{_error_detail(response)}"
+            )
+        return _output_text(response.json())
 
     def check(self) -> None:
         """Validate credentials, connectivity, and model access without token usage."""
@@ -83,6 +115,32 @@ def _error_detail(response: Any) -> str:
         return str(payload.get("error", {}).get("message") or "request rejected")[:500]
     except (ValueError, AttributeError):
         return response.text[:500] or "request rejected"
+
+
+def _cold_start_format() -> dict[str, Any]:
+    fields = (
+        "architecture",
+        "goals",
+        "watching",
+        "knob_candidates",
+        "protected",
+        "ambiguities",
+    )
+    properties: dict[str, Any] = {"summary": {"type": "string"}}
+    properties.update(
+        {name: {"type": "array", "items": {"type": "string"}} for name in fields}
+    )
+    return {
+        "type": "json_schema",
+        "name": "samantha_cold_start_analysis",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": properties,
+            "required": ["summary", *fields],
+            "additionalProperties": False,
+        },
+    }
 
 
 def _output_text(payload: dict[str, Any]) -> str:

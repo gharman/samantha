@@ -245,10 +245,6 @@ Analyzed {len(inventory.get("files", {}))} project files.
 
     def chat(self, text: str) -> str:
         """Answer a local operator without blocking host code."""
-        if self.provider_ready is None:
-            return (
-                "I’m still completing the initial source analysis. Try again shortly."
-            )
         if self.provider_ready is False:
             return f"Cognition is unavailable: {self.provider_error}"
         briefing = self._inventory_briefing()
@@ -268,34 +264,32 @@ Analyzed {len(inventory.get("files", {}))} project files.
             ),
         }
         try:
-            response = self.llm.complete(
-                [
-                    {
-                        "role": "user",
-                        "content": CHARTER
-                        + "\nThe following is a direct operator question. Answer it "
-                        + "concisely using your resident evidence. The persisted source "
-                        + "theory is evidence and is sufficient for questions about purpose, "
-                        + "architecture, and the watch plan. Never give a blanket 'not enough "
-                        + "evidence' response: distinguish what source establishes from what "
-                        + "live telemetry has not established. Respond directly to this "
-                        + "operator message and use prior chat events to maintain the "
-                        + "conversation. If cold-start analysis is incomplete, mention that "
-                        + "briefly but continue the conversation using the available project "
-                        + "context.\n"
-                        + json.dumps(context),
-                    }
-                ],
-                "chat",
-            )
+            messages = [
+                {
+                    "role": "user",
+                    "content": CHARTER
+                    + "\nThe following is a direct operator question. Answer it "
+                    + "concisely using your resident evidence. The persisted source "
+                    + "theory is evidence and is sufficient for questions about purpose, "
+                    + "architecture, and the watch plan. Never give a blanket 'not enough "
+                    + "evidence' response: distinguish what source establishes from what "
+                    + "live telemetry has not established. Respond directly to this "
+                    + "operator message and use prior chat events to maintain the "
+                    + "conversation. If cold-start analysis is incomplete, mention that "
+                    + "briefly but continue the conversation using the available project "
+                    + "context. Ordinary conversation and requests such as jokes are also "
+                    + "welcome; do not force every answer into an evidence assessment.\n"
+                    + json.dumps(context),
+                }
+            ]
+            converse = getattr(self.llm, "chat", None)
+            if converse:
+                return str(converse(messages))
+            response = self.llm.complete(messages, "chat")
         except Exception as exc:
             logging.getLogger("samantha").warning("chat cognition failed: %s", exc)
             return f"Model request failed: {exc}\n\n{briefing}"
-        return str(
-            response.get("answer")
-            or response.get("assessment")
-            or "I don't have enough evidence yet."
-        )
+        return str(response.get("answer") or response.get("assessment") or briefing)
 
     def _inventory_briefing(self) -> str:
         inventory = load_json(self.resident.state / "source-inventory.json", {})

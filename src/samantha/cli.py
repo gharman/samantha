@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import socket
@@ -44,6 +45,7 @@ def _select(pid: int | None) -> Path | None:
 
 
 def connect(path: Path) -> int:
+    _configure_history()
     with socket.socket(socket.AF_UNIX) as client:
         client.connect(str(path))
         incoming = client.makefile("rb")
@@ -69,6 +71,33 @@ def connect(path: Path) -> int:
         except (EOFError, KeyboardInterrupt):
             pass
     return 0
+
+
+def _configure_history() -> None:
+    try:
+        import readline
+    except ImportError:
+        return
+    directory = Path.home() / ".samantha"
+    history = directory / "cli-history"
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.chmod(0o700)
+        readline.read_history_file(history)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return
+    readline.set_history_length(1_000)
+
+    def save() -> None:
+        try:
+            readline.write_history_file(history)
+            history.chmod(0o600)
+        except OSError:
+            pass
+
+    atexit.register(save)
 
 
 def _message(line: bytes) -> dict[str, object]:
