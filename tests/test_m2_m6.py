@@ -5,7 +5,12 @@ from types import SimpleNamespace
 from samantha.act.ledger import Ledger
 from samantha.claims import ClaimStore
 from samantha.cognition.harness import Cognition
-from samantha.cognition.llm import FakeLLM, _cold_start_format, _output_text
+from samantha.cognition.llm import (
+    FakeLLM,
+    _action_plan_format,
+    _cold_start_format,
+    _output_text,
+)
 from samantha.report import generate
 from samantha.sentinels import WakeEvent
 from samantha.state import Journal, save_json
@@ -164,6 +169,14 @@ def test_cold_start_uses_strict_structured_output() -> None:
     assert output["strict"] is True
     assert output["schema"]["additionalProperties"] is False
     assert "watching" in output["schema"]["required"]
+
+
+def test_action_plan_uses_fixed_operation_vocabulary() -> None:
+    output = _action_plan_format()
+    operation = output["schema"]["properties"]["operations"]["items"]
+    assert output["strict"] is True
+    assert "intercept" in operation["properties"]["op"]["enum"]
+    assert "exec" not in operation["properties"]["op"]["enum"]
 
 
 def test_chat_can_be_ordinary_conversation(tmp_path: Path) -> None:

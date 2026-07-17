@@ -46,7 +46,21 @@ The directory is created during import with user-only permissions. Set
 `SAMANTHA_STATE_DIR` to override the base directory for tests or custom deployments.
 
 Modes are `off`, `observe`, `advise` (default), and `act`. Actuation additionally
-requires earned per-knob trust. No API key is needed for observe mode or tests.
+requires an explicit `SAMANTHA=act` in the host process. No API key is needed for
+observe mode or tests.
+
+In act mode, application-specific handlers and `expose()` declarations are not
+required. Samantha indexes live project modules, active project frames, globals,
+mappings, collections, classes, instances, and existing project callables. Its
+audited generic operations can inspect/search paths, assign attributes or items,
+append/enqueue values, invoke existing project callables, install fixed argument
+interceptors, and emit operator receipts. It never executes model-authored code.
+
+Related operations form an intervention group with an inferred `one_shot`,
+`temporary`, `process`, `until_failure`, or contextual lifetime. Successful
+changes remain when that lifetime calls for it; retained inverse assignments
+support rollback. Multiple related changes may be applied together, while
+conflicting changes to the same path are rejected.
 
 Operator intent can be supplied by `SAMANTHA_GOAL`, `samantha.goal()`, chat, or
 read-only source comments:

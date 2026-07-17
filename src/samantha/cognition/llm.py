@@ -93,6 +93,31 @@ class OpenAILLM:
             )
         return _output_text(response.json())
 
+    def plan_action(self, messages: list[dict[str, str]]) -> dict[str, Any]:
+        """Plan runtime tool use with a strict, non-code schema."""
+        import httpx
+
+        response = httpx.post(
+            f"{self.base_url}/v1/responses",
+            timeout=self.timeout,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": self.model,
+                "input": messages,
+                "instructions": (
+                    "Plan a direct response or audited operations over the supplied live "
+                    "runtime paths. Never invent a path or claim an operation succeeded."
+                ),
+                "text": {"format": _action_plan_format()},
+            },
+        )
+        if response.is_error:
+            raise RuntimeError(
+                f"OpenAI API returned HTTP {response.status_code}: "
+                f"{_error_detail(response)}"
+            )
+        return json.loads(_output_text(response.json()))
+
     def check(self) -> None:
         """Validate credentials, connectivity, and model access without token usage."""
         import httpx
@@ -138,6 +163,80 @@ def _cold_start_format() -> dict[str, Any]:
             "type": "object",
             "properties": properties,
             "required": ["summary", *fields],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _action_plan_format() -> dict[str, Any]:
+    operation = {
+        "type": "object",
+        "properties": {
+            "op": {
+                "type": "string",
+                "enum": [
+                    "search",
+                    "inspect",
+                    "set",
+                    "append",
+                    "enqueue",
+                    "call",
+                    "intercept",
+                    "emit",
+                ],
+            },
+            "path": {"type": ["string", "null"]},
+            "query": {"type": ["string", "null"]},
+            "value_json": {"type": ["string", "null"]},
+            "args_json": {"type": ["string", "null"]},
+            "kwargs_json": {"type": ["string", "null"]},
+            "lifetime": {
+                "type": "string",
+                "enum": [
+                    "one_shot",
+                    "temporary",
+                    "process",
+                    "until_failure",
+                    "contextual",
+                ],
+            },
+            "reason": {"type": "string"},
+        },
+        "required": [
+            "op",
+            "path",
+            "query",
+            "value_json",
+            "args_json",
+            "kwargs_json",
+            "lifetime",
+            "reason",
+        ],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "json_schema",
+        "name": "samantha_runtime_plan",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "intent": {"type": "string", "enum": ["converse", "inspect", "act"]},
+                "reply": {"type": "string"},
+                "done": {"type": "boolean"},
+                "lifetime": {
+                    "type": "string",
+                    "enum": [
+                        "one_shot",
+                        "temporary",
+                        "process",
+                        "until_failure",
+                        "contextual",
+                    ],
+                },
+                "operations": {"type": "array", "items": operation, "maxItems": 12},
+            },
+            "required": ["intent", "reply", "done", "lifetime", "operations"],
             "additionalProperties": False,
         },
     }

@@ -247,6 +247,10 @@ Analyzed {len(inventory.get("files", {}))} project files.
         """Answer a local operator without blocking host code."""
         if self.provider_ready is False:
             return f"Cognition is unavailable: {self.provider_error}"
+        if self.resident.config.mode == "act" and (
+            actuator := getattr(self.resident, "actuator", None)
+        ):
+            return actuator.handle(text)
         briefing = self._inventory_briefing()
         model_context = (
             (self.resident.state / "model.md").read_text(errors="replace")

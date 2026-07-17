@@ -214,6 +214,10 @@ def _start_runtime(current: Resident) -> None:
                     current.config.llm_timeout,
                 ),
             )
+            if current.config.mode == "act":
+                from .act.controller import ActController
+
+                current.actuator = ActController(current, current.cognition.llm)
             current.cognition.start()
         current.observer.on_observation = lambda source, text: _inspect(current, text)
     except Exception as exc:
