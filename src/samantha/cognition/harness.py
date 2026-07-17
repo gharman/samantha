@@ -251,12 +251,16 @@ Analyzed {len(inventory.get("files", {}))} project files.
             )
         if self.provider_ready is False:
             return f"Cognition is unavailable: {self.provider_error}"
-        if self.analysis_ready is not True:
-            return self._inventory_briefing()
+        briefing = self._inventory_briefing()
+        model_context = (
+            (self.resident.state / "model.md").read_text(errors="replace")
+            if self.analysis_ready is True
+            else briefing
+        )
         context = {
             "operator_question": text,
             "mode": self.resident.config.mode,
-            "model": (self.resident.state / "model.md").read_text(errors="replace"),
+            "project_context": model_context,
             "recent_evidence": self._recent_journal(),
             "recent_process_activity": self._recent_activity(),
             "cold_start_analysis": (
@@ -274,7 +278,11 @@ Analyzed {len(inventory.get("files", {}))} project files.
                         + "theory is evidence and is sufficient for questions about purpose, "
                         + "architecture, and the watch plan. Never give a blanket 'not enough "
                         + "evidence' response: distinguish what source establishes from what "
-                        + "live telemetry has not established.\n"
+                        + "live telemetry has not established. Respond directly to this "
+                        + "operator message and use prior chat events to maintain the "
+                        + "conversation. If cold-start analysis is incomplete, mention that "
+                        + "briefly but continue the conversation using the available project "
+                        + "context.\n"
                         + json.dumps(context),
                     }
                 ],
@@ -282,7 +290,7 @@ Analyzed {len(inventory.get("files", {}))} project files.
             )
         except Exception as exc:
             logging.getLogger("samantha").warning("chat cognition failed: %s", exc)
-            return f"Model request failed: {exc}"
+            return f"Model request failed: {exc}\n\n{briefing}"
         return str(
             response.get("answer")
             or response.get("assessment")
@@ -295,7 +303,7 @@ Analyzed {len(inventory.get("files", {}))} project files.
         entry = str(inventory.get("entry") or "unknown")
         entry_info = files.get(entry, {})
         purpose_parts = [entry_info.get("docstring")]
-        purpose_parts.extend(entry_info.get("help_strings", [])[:3])
+        purpose_parts.extend(entry_info.get("help_strings", [])[:1])
         purpose = " ".join(part for part in purpose_parts if part)
         if not purpose:
             purpose = "No explicit entry-point purpose found."

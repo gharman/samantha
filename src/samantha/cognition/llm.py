@@ -52,9 +52,7 @@ class OpenAILLM:
                 f"OpenAI API returned HTTP {response.status_code}: {detail}"
             )
         payload = response.json()
-        text = payload.get("output_text")
-        if not text:
-            text = payload["output"][0]["content"][0]["text"]
+        text = _output_text(payload)
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -85,6 +83,27 @@ def _error_detail(response: Any) -> str:
         return str(payload.get("error", {}).get("message") or "request rejected")[:500]
     except (ValueError, AttributeError):
         return response.text[:500] or "request rejected"
+
+
+def _output_text(payload: dict[str, Any]) -> str:
+    """Find text across Responses output items, skipping reasoning/tool records."""
+    if isinstance(payload.get("output_text"), str) and payload["output_text"]:
+        return payload["output_text"]
+    refusals = []
+    for item in payload.get("output", []):
+        for content in item.get("content", []) or []:
+            text = content.get("text")
+            if isinstance(text, str) and text:
+                return text
+            refusal = content.get("refusal")
+            if refusal:
+                refusals.append(str(refusal))
+    if refusals:
+        raise RuntimeError(f"OpenAI refused the response: {'; '.join(refusals)}")
+    status = payload.get("status", "unknown")
+    details = payload.get("incomplete_details") or {}
+    suffix = f": {details}" if details else ""
+    raise RuntimeError(f"OpenAI response contained no text (status={status}){suffix}")
 
 
 AnthropicLLM = OpenAILLM

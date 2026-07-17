@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from samantha.act.ledger import Ledger
 from samantha.claims import ClaimStore
 from samantha.cognition.harness import Cognition
-from samantha.cognition.llm import FakeLLM
+from samantha.cognition.llm import FakeLLM, _output_text
 from samantha.report import generate
 from samantha.sentinels import WakeEvent
 from samantha.state import Journal, save_json
@@ -116,6 +116,46 @@ def test_analysis_timeout_does_not_disable_provider_or_chat(tmp_path: Path) -> N
     assert "worker.py" in reply
     assert "No runtime metric activity" in reply
     assert cognition.provider_ready is True
+
+
+def test_incomplete_analysis_still_has_live_conversation(tmp_path: Path) -> None:
+    resident = fake_resident(tmp_path)
+    save_json(
+        tmp_path / "source-inventory.json",
+        {
+            "entry": "app.py",
+            "files": {"app.py": {"docstring": "Runs an idea funnel."}},
+        },
+    )
+    cognition = Cognition(
+        resident,
+        FakeLLM(
+            {
+                "chat": {
+                    "answer": "I’m still analyzing, but this is an idea-funnel application."
+                }
+            }
+        ),
+    )
+    cognition.provider_ready = True
+    cognition.analysis_ready = False
+    cognition.analysis_error = "initial request timed out"
+    reply = cognition.chat("What does it do?")
+    assert reply == "I’m still analyzing, but this is an idea-funnel application."
+
+
+def test_responses_parser_skips_reasoning_items() -> None:
+    payload = {
+        "status": "completed",
+        "output": [
+            {"type": "reasoning", "summary": []},
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": '{"answer":"ready"}'}],
+            },
+        ],
+    }
+    assert _output_text(payload) == '{"answer":"ready"}'
 
 
 def test_claim_demotion(tmp_path: Path) -> None:
