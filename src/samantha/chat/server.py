@@ -49,7 +49,14 @@ class ChatServer:
 
     def _client(self, client: socket.socket) -> None:
         client.sendall(
-            encode("hello", mode=self.resident.config.mode, project=self.resident.key)
+            encode(
+                "hello",
+                mode=self.resident.config.mode,
+                project=self.resident.key,
+                pid=os.getpid(),
+                root=str(self.resident.root),
+                model=self.resident.config.model,
+            )
         )
         for line in client.makefile("rb"):
             try:

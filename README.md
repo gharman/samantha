@@ -20,6 +20,10 @@ The import arms the complete resident: observation, deterministic sentinels,
 advisory cognition, persistent state, and a local chat socket. The host program
 is launched normally; it does not need to be wrapped by a Samantha command.
 
+Startup identifies the full project and attach PID, summarizes the entry source
+and active watch set, and asynchronously validates OpenAI credentials and model
+access. Provider failures are reported at startup with a sanitized API error.
+
 State is stored under the platform user-state directory, never in the observed project.
 
 Modes are `off`, `observe`, `advise` (default), and `act`. Actuation additionally

@@ -50,3 +50,18 @@ def test_dotenv_openai_key_arms_configuration(
     config = Config.resolve()
     assert config.api_key == "test-key"
     assert config.model == "test-model"
+
+
+def test_dotenv_can_be_loaded_from_discovered_root(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    project = tmp_path / "project"
+    elsewhere = tmp_path / "elsewhere"
+    project.mkdir()
+    elsewhere.mkdir()
+    (project / ".env").write_text("OPENAI_API_KEY=root-key\n")
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config = Config.resolve(_dotenv_start=project)
+    assert config.api_key == "root-key"
+    assert config.dotenv_file == str(project / ".env")

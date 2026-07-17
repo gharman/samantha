@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import re
 from typing import Any
 
 
@@ -39,15 +40,48 @@ class OpenAILLM:
             json={
                 "model": self.model,
                 "input": messages,
-                "text": {"format": {"type": "json_object"}},
+                "instructions": "Return a single valid JSON object and no markdown.",
             },
         )
-        response.raise_for_status()
+        if response.is_error:
+            detail = _error_detail(response)
+            raise RuntimeError(
+                f"OpenAI API returned HTTP {response.status_code}: {detail}"
+            )
         payload = response.json()
         text = payload.get("output_text")
         if not text:
             text = payload["output"][0]["content"][0]["text"]
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", text, re.S)
+            if match:
+                return json.loads(match.group())
+            return {"assessment": text, "answer": text, "actions": []}
+
+    def check(self) -> None:
+        """Validate credentials, connectivity, and model access without token usage."""
+        import httpx
+
+        response = httpx.get(
+            f"{self.base_url}/v1/models/{self.model}",
+            timeout=15,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+        )
+        if response.is_error:
+            raise RuntimeError(
+                f"OpenAI API returned HTTP {response.status_code}: "
+                f"{_error_detail(response)}"
+            )
+
+
+def _error_detail(response: Any) -> str:
+    try:
+        payload = response.json()
+        return str(payload.get("error", {}).get("message") or "request rejected")[:500]
+    except (ValueError, AttributeError):
+        return response.text[:500] or "request rejected"
 
 
 AnthropicLLM = OpenAILLM

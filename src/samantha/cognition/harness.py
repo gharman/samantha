@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 import uuid
 from collections import deque
@@ -18,8 +19,35 @@ class Cognition:
         self.tokens = 0
         self.open_flags: dict[str, dict[str, Any]] = {}
         self.warned = False
+        self.provider_ready: bool | None = None
+        self.provider_error: str | None = None
+
+    def start(self) -> None:
+        threading.Thread(
+            target=self._check_provider,
+            name="samantha-cog",
+            daemon=True,
+        ).start()
+
+    def _check_provider(self) -> None:
+        try:
+            check = getattr(self.llm, "check", None)
+            if check:
+                check()
+            self.provider_ready = True
+            logging.getLogger("samantha").info(
+                "cognition ready · model=%s", self.resident.config.model
+            )
+        except Exception as exc:
+            self.provider_ready = False
+            self.provider_error = str(exc)
+            logging.getLogger("samantha").warning(
+                "cognition unavailable at startup: %s", exc
+            )
 
     def wake(self, event: Any) -> dict[str, Any] | None:
+        if self.provider_ready is False:
+            return None
         now = time.time()
         while self.wakes and self.wakes[0] < now - 3600:
             self.wakes.popleft()
@@ -85,6 +113,8 @@ class Cognition:
 
     def chat(self, text: str) -> str:
         """Answer a local operator without blocking host code."""
+        if self.provider_ready is False:
+            return f"Cognition is unavailable: {self.provider_error}"
         context = {
             "operator_question": text,
             "mode": self.resident.config.mode,
@@ -104,8 +134,10 @@ class Cognition:
                 "chat",
             )
         except Exception as exc:
+            self.provider_ready = False
+            self.provider_error = str(exc)
             logging.getLogger("samantha").warning("chat cognition failed: %s", exc)
-            return "I couldn't reach the configured model."
+            return f"Model request failed: {exc}"
         return str(
             response.get("answer")
             or response.get("assessment")

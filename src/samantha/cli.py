@@ -47,18 +47,35 @@ def connect(path: Path) -> int:
     with socket.socket(socket.AF_UNIX) as client:
         client.connect(str(path))
         incoming = client.makefile("rb")
-        print(incoming.readline().decode().strip())
+        hello = _message(incoming.readline())
+        print(f"Connected to Samantha in process {hello.get('pid', path.stem)}")
+        print(
+            f"Project: {hello.get('root', 'unknown')} ({hello.get('project', 'unknown')})"
+        )
+        print(
+            f"Mode: {hello.get('mode', 'unknown')} · Model: {hello.get('model', 'unknown')}"
+        )
+        print()
         try:
             while line := input("samantha> "):
                 kind = "bye" if line.strip() in {"bye", "quit", "exit"} else "command"
                 message = json.dumps({"type": kind, "text": line}) + "\n"
                 client.sendall(message.encode())
-                print(incoming.readline().decode().strip())
+                response = _message(incoming.readline())
+                print(response.get("reply") or response.get("error") or "No response.")
+                print()
                 if kind == "bye":
                     break
         except (EOFError, KeyboardInterrupt):
             pass
     return 0
+
+
+def _message(line: bytes) -> dict[str, object]:
+    try:
+        return json.loads(line)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {"error": "The resident sent an unreadable response."}
 
 
 def main(argv: list[str] | None = None) -> int:

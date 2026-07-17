@@ -43,6 +43,17 @@ def test_fake_cognition_answers_operator(tmp_path: Path) -> None:
     assert cognition.chat("How is the queue?") == "The queue is currently healthy."
 
 
+def test_provider_failure_is_available_to_chat(tmp_path: Path) -> None:
+    class BrokenLLM:
+        def check(self) -> None:
+            raise RuntimeError("invalid model")
+
+    resident = fake_resident(tmp_path)
+    cognition = Cognition(resident, BrokenLLM())
+    cognition._check_provider()
+    assert cognition.chat("hello") == "Cognition is unavailable: invalid model"
+
+
 def test_claim_demotion(tmp_path: Path) -> None:
     source = tmp_path / "code.py"
     source.write_text("def train():\n    return 1\n")

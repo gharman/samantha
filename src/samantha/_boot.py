@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
-import atexit
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,10 +26,12 @@ class Config:
     max_wakes_per_hour: int = 6
     token_budget_per_day: int = 2_000_000
     flag_budget: int = 3
+    dotenv_file: str | None = None
 
     @classmethod
     def resolve(cls, **overrides: object) -> "Config":
-        _load_dotenv()
+        dotenv_start = overrides.pop("_dotenv_start", None)
+        dotenv_file = _load_dotenv(dotenv_start)
         values = dict(
             mode=os.getenv("SAMANTHA", "advise"),
             goal=os.getenv("SAMANTHA_GOAL"),
@@ -42,6 +44,7 @@ class Config:
                 os.getenv("SAMANTHA_TOKEN_BUDGET_PER_DAY", "2000000")
             ),
             flag_budget=int(os.getenv("SAMANTHA_FLAG_BUDGET", "3")),
+            dotenv_file=str(dotenv_file) if dotenv_file else None,
         )
         values.update({k: v for k, v in overrides.items() if v is not None})
         if values["mode"] not in {"off", "observe", "advise", "act"}:
@@ -49,7 +52,7 @@ class Config:
         return cls(**values)
 
 
-def _load_dotenv(start: Path | None = None) -> None:
+def _load_dotenv(start: Path | None = None) -> Path | None:
     """Load the nearest .env without adding a runtime dependency."""
     origin = (start or Path.cwd()).resolve()
     for directory in (origin, *origin.parents):
@@ -62,7 +65,8 @@ def _load_dotenv(start: Path | None = None) -> None:
                 continue
             key, value = line.removeprefix("export ").split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-        return
+        return path
+    return None
 
 
 @dataclass
@@ -93,13 +97,13 @@ def arm(
     entry: str | Path | None = None, *, force: bool = False, **overrides: object
 ) -> Resident | None:
     global _resident
-    config = Config.resolve(**overrides)
+    root, key = discover_project(entry)
+    config = Config.resolve(_dotenv_start=root, **overrides)
     if config.mode == "off":
         return None
     if _resident:
         return _resident
     _logging()
-    root, key = discover_project(entry)
     state = state_root(key, config.state_dir)
     journal = Journal(state)
     _resident = Resident(config, root, key, journal, state)
@@ -121,7 +125,12 @@ def arm(
         )
     if not config.api_key and config.mode in {"advise", "act"} and not force:
         LOG.info("no API key; cognition dormant")
-    LOG.info("resident armed (%s) · project %s…", config.mode, key[:4])
+    LOG.info(
+        "resident armed · mode=%s · pid=%s · project=%s",
+        config.mode,
+        os.getpid(),
+        key,
+    )
     journal.write(
         "observation", source="boot", payload={"mode": config.mode, "project": key}
     )
@@ -137,17 +146,47 @@ def arm(
             from .observe.source import read_source
 
             inventory = read_source(Path(entry).resolve(), root)
-            theory = config.goal or next(
+            docstring = next(
                 (v["docstring"] for v in inventory["files"].values() if v["docstring"]),
-                "Python program",
+                None,
             )
-            (state / "model.md").write_text(f"# Program theory\n\n{theory}\n")
+            relative_entry = str(Path(entry).resolve().relative_to(root))
+            theory = config.goal or docstring or f"Entry point {relative_entry}"
+            entry_source = inventory["files"].get(relative_entry, {}).get("text", "")
+            directives = inventory["directives"]
+            model = (
+                "# Program inventory\n\n"
+                f"- Project root: {root}\n"
+                f"- Entry point: {relative_entry}\n"
+                f"- Current purpose: {theory}\n"
+                f"- Operator goal: {config.goal or 'not specified'}\n"
+                f"- Daemon directives: {directives or 'none'}\n\n"
+                "## Entry source\n\n```python\n"
+                f"{entry_source[:20_000]}\n```\n"
+            )
+            (state / "model.md").write_text(model)
             (state / "goals.md").touch(exist_ok=True)
-            LOG.info("theory: %s", theory.splitlines()[0][:160])
+            goal_status = config.goal or "not specified"
+            LOG.info(
+                "source: %s · goal: %s · directives: %s",
+                relative_entry,
+                goal_status,
+                len(inventory["directives"]),
+            )
         except Exception as exc:
             LOG.warning("source inventory disabled: %s", exc)
     (state / "model.md").touch(exist_ok=True)
     (state / "goals.md").touch(exist_ok=True)
+    LOG.info(
+        "watching: logs, stdout/stderr, numeric metrics, exceptions, stalls, "
+        "aspiration gaps, regressions"
+    )
+    if config.api_key:
+        source = config.dotenv_file or "process environment"
+        LOG.info(
+            "cognition: checking OpenAI %s · credentials: %s", config.model, source
+        )
+    LOG.info("attach: samantha --pid %s", os.getpid())
     _start_runtime(_resident)
     return _resident
 
@@ -169,6 +208,7 @@ def _start_runtime(current: Resident) -> None:
                     current.config.base_url,
                 ),
             )
+            current.cognition.start()
         current.observer.on_observation = lambda source, text: _inspect(current, text)
     except Exception as exc:
         LOG.warning("cognition dormant: %s", exc)

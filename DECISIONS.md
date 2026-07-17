@@ -32,3 +32,7 @@ Recurrence identity is a stable textual signature of the affected knob, flag tex
 ## Import-first product correction
 
 The installed library now starts its complete resident from a plain `import samantha`; the host is always launched normally. A dependency-free nearest-ancestor `.env` reader supplies `OPENAI_API_KEY` without overriding an existing environment variable. Cognition uses OpenAI's Responses API with a configurable balanced-model default. The console script has one responsibility: discover and attach to an already-running resident socket; operational subcommands and the launch wrapper are no longer public product surfaces.
+
+## Startup and operator experience correction
+
+Project identity is displayed in full for state correlation, while attachment is explicitly PID-based. Startup reports the actual entry point, goal/directive inventory, watch set, credential source, and configured model; it no longer emits a generic placeholder theory. The entry source is retained in `model.md` so initial chat questions have useful project context. OpenAI credentials, connectivity, and model access are probed immediately on a daemon cognition thread, preserving non-blocking imports while surfacing sanitized failures before operator chat. The terminal client decodes NDJSON internally and renders a human-readable connection banner and replies.
