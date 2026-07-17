@@ -1,4 +1,5 @@
 """Deterministic multi-head trainer used as samantha's acceptance rig."""
+
 import argparse
 import random
 
@@ -21,4 +22,3 @@ for step in range(args.steps):
         scores[i] += min(0.006 * effective, max(0.0, target - scores[i]))
         print(f"fidelity head_{i}: {scores[i]:.3f} (ceiling {ceiling:.3f})")
     print(f"loss={sum(ceilings[i] - scores[i] for i in range(4)):.3f} gpu/util: 72%")
-

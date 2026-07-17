@@ -1,4 +1,5 @@
 """Safe startup and configuration resolution."""
+
 from __future__ import annotations
 
 import logging
@@ -28,12 +29,16 @@ class Config:
     @classmethod
     def resolve(cls, **overrides: object) -> "Config":
         values = dict(
-            mode=os.getenv("SAMANTHA", "advise"), goal=os.getenv("SAMANTHA_GOAL"),
+            mode=os.getenv("SAMANTHA", "advise"),
+            goal=os.getenv("SAMANTHA_GOAL"),
             model=os.getenv("SAMANTHA_MODEL", "claude-sonnet-4-6"),
             base_url=os.getenv("SAMANTHA_BASE_URL", "https://api.anthropic.com"),
-            api_key=os.getenv("ANTHROPIC_API_KEY"), state_dir=os.getenv("SAMANTHA_STATE_DIR"),
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            state_dir=os.getenv("SAMANTHA_STATE_DIR"),
             max_wakes_per_hour=int(os.getenv("SAMANTHA_MAX_WAKES_PER_HOUR", "6")),
-            token_budget_per_day=int(os.getenv("SAMANTHA_TOKEN_BUDGET_PER_DAY", "2000000")),
+            token_budget_per_day=int(
+                os.getenv("SAMANTHA_TOKEN_BUDGET_PER_DAY", "2000000")
+            ),
             flag_budget=int(os.getenv("SAMANTHA_FLAG_BUDGET", "3")),
         )
         values.update({k: v for k, v in overrides.items() if v is not None})
@@ -66,7 +71,9 @@ def _logging() -> None:
     LOG.propagate = False
 
 
-def arm(entry: str | Path | None = None, *, force: bool = False, **overrides: object) -> Resident | None:
+def arm(
+    entry: str | Path | None = None, *, force: bool = False, **overrides: object
+) -> Resident | None:
     global _resident
     config = Config.resolve(**overrides)
     if config.mode == "off":
@@ -80,19 +87,29 @@ def arm(entry: str | Path | None = None, *, force: bool = False, **overrides: ob
     _resident = Resident(config, root, key, journal, state)
     from .claims import ClaimStore
     from .baselines import Baselines
+
     _resident.claims = ClaimStore(state / "claims.json")
     demoted = _resident.claims.validate()
     _resident.baselines = Baselines(state / "baselines.json")
     from .act.ledger import Ledger
+
     _resident.ledger = Ledger(state / "ledger.json")
     for claim in demoted:
-        journal.write("demotion", knob=claim, **{"from": "fact", "to": "hypothesis"}, cause="fingerprint changed")
+        journal.write(
+            "demotion",
+            knob=claim,
+            **{"from": "fact", "to": "hypothesis"},
+            cause="fingerprint changed",
+        )
     if not config.api_key and config.mode in {"advise", "act"} and not force:
         LOG.info("no API key; cognition dormant")
     LOG.info("resident armed (%s) · project %s…", config.mode, key[:4])
-    journal.write("observation", source="boot", payload={"mode": config.mode, "project": key})
+    journal.write(
+        "observation", source="boot", payload={"mode": config.mode, "project": key}
+    )
     try:
         from .observe import Observer
+
         _resident.observer = Observer(journal)
         _resident.observer.start()
     except Exception as exc:
@@ -100,8 +117,12 @@ def arm(entry: str | Path | None = None, *, force: bool = False, **overrides: ob
     if entry:
         try:
             from .observe.source import read_source
+
             inventory = read_source(Path(entry).resolve(), root)
-            theory = config.goal or next((v["docstring"] for v in inventory["files"].values() if v["docstring"]), "Python program")
+            theory = config.goal or next(
+                (v["docstring"] for v in inventory["files"].values() if v["docstring"]),
+                "Python program",
+            )
             (state / "model.md").write_text(f"# Program theory\n\n{theory}\n")
             (state / "goals.md").touch(exist_ok=True)
             LOG.info("theory: %s", theory.splitlines()[0][:160])

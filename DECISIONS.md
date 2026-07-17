@@ -24,3 +24,7 @@ Claims store the source path, optional enclosing function, and AST-derived finge
 ## M5
 
 Actuation can reach only explicitly registered Python setters or object attributes. Numeric bounds are checked again at assignment time, terminal protected/dead states cannot transition, and only trusted knobs are authorized. Probes always attempt exact restoration in a `finally` block. The intervention manager permits one live change and records both prediction and inverse recipe data before outcome evaluation.
+
+## M6
+
+Recurrence identity is a stable textual signature of the affected knob, flag text, or proposal body, and the threshold counts distinct run IDs rather than raw event count. Reports remain useful without an API key by emitting a conservative diff sketch; callers may inject the same structured LLM interface to refine it. Export is an explicit CLI operation and is the only feature that writes an artifact in the current directory.

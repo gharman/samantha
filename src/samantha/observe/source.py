@@ -1,4 +1,5 @@
 """Budgeted project source inventory and daemon directives."""
+
 from __future__ import annotations
 
 import ast
@@ -16,16 +17,26 @@ def read_source(path: Path, root: Path, budget: int = 200_000) -> dict[str, Any]
     seen: set[Path] = set()
     for candidate in candidates:
         candidate = candidate.resolve()
-        if candidate in seen or not candidate.is_file() or root not in candidate.parents and candidate != root:
+        if (
+            candidate in seen
+            or not candidate.is_file()
+            or root not in candidate.parents
+            and candidate != root
+        ):
             continue
         seen.add(candidate)
         text = candidate.read_text(errors="replace")[:budget]
         budget -= len(text)
-        result["files"][str(candidate.relative_to(root))] = {"text": text, "docstring": _docstring(text)}
+        result["files"][str(candidate.relative_to(root))] = {
+            "text": text,
+            "docstring": _docstring(text),
+        }
         result["directives"].extend(DIRECTIVE.findall(text))
         if candidate.name == "pyproject.toml":
             try:
-                result["config"] = tomllib.loads(text).get("tool", {}).get("samantha", {})
+                result["config"] = (
+                    tomllib.loads(text).get("tool", {}).get("samantha", {})
+                )
             except tomllib.TOMLDecodeError:
                 pass
         if budget <= 0:
@@ -38,4 +49,3 @@ def _docstring(text: str) -> str | None:
         return ast.get_docstring(ast.parse(text))
     except SyntaxError:
         return None
-

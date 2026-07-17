@@ -1,4 +1,5 @@
 """Small deterministic leak and novel-error acceptance workload."""
+
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -10,4 +11,3 @@ for item in range(args.items):
     if item == args.items // 2:
         print(f"WARNING novel queue fault at item={item}")
 print(f"processed={args.items}")
-

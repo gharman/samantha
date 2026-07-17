@@ -1,4 +1,5 @@
 """Stable project discovery and source fingerprints."""
+
 from __future__ import annotations
 
 import ast
@@ -29,7 +30,8 @@ def fingerprint(path: str | Path, function: str | None = None) -> str:
         try:
             tree = ast.parse(data)
             node = next(
-                n for n in ast.walk(tree)
+                n
+                for n in ast.walk(tree)
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                 and n.name == function
             )
@@ -37,4 +39,3 @@ def fingerprint(path: str | Path, function: str | None = None) -> str:
         except (SyntaxError, StopIteration):
             pass
     return hashlib.sha256(data).hexdigest()
-

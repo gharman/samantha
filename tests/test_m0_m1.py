@@ -1,8 +1,7 @@
-import io
 import json
 from pathlib import Path
 
-from samantha.identity import discover_project, fingerprint
+from samantha.identity import fingerprint
 from samantha.observe.census import census
 from samantha.observe.hotread import CountingDict
 from samantha.observe.metrics import MetricStore

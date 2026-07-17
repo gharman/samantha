@@ -1,2 +1,1 @@
 """Constrained in-memory actuation."""
-

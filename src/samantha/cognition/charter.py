@@ -18,4 +18,3 @@ Rules you never break:
 - If a fix belongs in source, say so: propose the diff, don't paper over it.
 - When uncertain about intent, ask one question and queue it; never block.
 - You are not the hero. Your best outcome is becoming unnecessary."""
-

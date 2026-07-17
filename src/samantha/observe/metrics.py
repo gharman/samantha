@@ -1,16 +1,23 @@
 """Line-oriented numeric series extraction."""
+
 from __future__ import annotations
 
-import math
 import re
 import statistics
 from collections import defaultdict, deque
 from typing import Any
 
 NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|[-+]?inf|nan"
-PAIR = re.compile(rf"(?P<name>[A-Za-z][\w./-]*(?:\s+[A-Za-z][\w.-]*)?)\s*[:=]\s*(?P<value>{NUMBER})\s*(?P<pct>%?)", re.I)
-SPACE = re.compile(rf"(?P<name>[A-Za-z][\w./-]+)\s+(?P<value>{NUMBER})(?P<pct>%)?", re.I)
-CEILING = re.compile(rf"(?:ceiling|target|expected|budget|limit)\s*[:=]?\s*(?P<value>{NUMBER})", re.I)
+PAIR = re.compile(
+    rf"(?P<name>[A-Za-z][\w./-]*(?:\s+[A-Za-z][\w.-]*)?)\s*[:=]\s*(?P<value>{NUMBER})\s*(?P<pct>%?)",
+    re.I,
+)
+SPACE = re.compile(
+    rf"(?P<name>[A-Za-z][\w./-]+)\s+(?P<value>{NUMBER})(?P<pct>%)?", re.I
+)
+CEILING = re.compile(
+    rf"(?:ceiling|target|expected|budget|limit)\s*[:=]?\s*(?P<value>{NUMBER})", re.I
+)
 
 
 def _name(value: str) -> str:
@@ -58,5 +65,10 @@ class MetricStore:
         if not values:
             return {}
         slope = (values[-1] - values[0]) / max(1, len(values) - 1)
-        return {"n": len(values), "min": min(values), "max": max(values), "mean": statistics.fmean(values), "slope": slope}
-
+        return {
+            "n": len(values),
+            "min": min(values),
+            "max": max(values),
+            "mean": statistics.fmean(values),
+            "slope": slope,
+        }

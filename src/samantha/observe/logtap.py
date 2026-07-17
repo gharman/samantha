@@ -1,10 +1,10 @@
 """Transparent logging and stdio taps."""
+
 from __future__ import annotations
 
 import io
 import logging
 import sys
-import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -36,7 +36,9 @@ class LogTap:
 
 
 class Tee(io.TextIOBase):
-    def __init__(self, wrapped: Any, source: str, emit_line: Callable[[str, str], None]) -> None:
+    def __init__(
+        self, wrapped: Any, source: str, emit_line: Callable[[str, str], None]
+    ) -> None:
         self.wrapped, self.source, self.emit_line = wrapped, source, emit_line
         self._buffer = ""
         self._last_frame = 0.0
@@ -74,4 +76,3 @@ class StreamTap:
         if self.originals:
             sys.stdout, sys.stderr = self.originals
             self.originals = None
-

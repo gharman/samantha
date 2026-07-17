@@ -1,4 +1,5 @@
 """samantha public API."""
+
 from __future__ import annotations
 
 import os
@@ -10,6 +11,7 @@ from ._boot import arm, resident
 __version__ = "1.0.0"
 _exposures: dict[str, "Exposure"] = {}
 
+
 @dataclass
 class Exposure:
     name: str
@@ -18,22 +20,52 @@ class Exposure:
     bounds: tuple[float, float] | None = None
     kind: str = "value"
 
-def expose(name: str, *, obj: Any = None, attr: str | None = None, setter: Callable[[Any], None] | None = None, kind: str = "value", logged: bool = True, bounds: tuple[float, float] | None = None) -> None:
+
+def expose(
+    name: str,
+    *,
+    obj: Any = None,
+    attr: str | None = None,
+    setter: Callable[[Any], None] | None = None,
+    kind: str = "value",
+    logged: bool = True,
+    bounds: tuple[float, float] | None = None,
+) -> None:
     if setter is not None:
-        get = lambda: None; set_value = setter
+
+        def get() -> None:
+            return None
+
+        set_value = setter
     elif obj is not None and attr:
-        get = lambda: getattr(obj, attr); set_value = lambda value: setattr(obj, attr, value)
-    else: raise ValueError("provide setter or obj and attr")
+
+        def get() -> Any:
+            return getattr(obj, attr)
+
+        def set_value(value: Any) -> None:
+            setattr(obj, attr, value)
+    else:
+        raise ValueError("provide setter or obj and attr")
     _exposures[name] = Exposure(name, get, set_value, bounds, kind)
     if current := resident():
         current.ledger.register(name, bounds)
 
+
 def goal(text: str) -> None:
-    if current := resident(): current.config.goal = text; current.journal.write("chat", direction="api", text=text)
+    if current := resident():
+        current.config.goal = text
+        current.journal.write("chat", direction="api", text=text)
+
+
 def event(text: str) -> None:
-    if current := resident(): current.journal.write("observation", source="api", payload=text)
+    if current := resident():
+        current.journal.write("observation", source="api", payload=text)
+
+
 def silence(minutes: int = 30) -> None:
-    if current := resident(): current.quiet_until = __import__("time").time() + minutes * 60
+    if current := resident():
+        current.quiet_until = __import__("time").time() + minutes * 60
+
 
 if os.getenv("SAMANTHA") != "off":
     try:

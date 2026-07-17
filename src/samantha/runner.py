@@ -1,4 +1,5 @@
 """In-process script runner."""
+
 from __future__ import annotations
 
 import runpy
@@ -22,8 +23,13 @@ def run(script: str, args: list[str], **config: object) -> int:
         sys.argv = old_argv
         if resident and hasattr(resident, "observer"):
             from .sentinels import Sentinels
+
             events = Sentinels(resident.observer.metrics).inspect_metrics()
             for event in events:
-                resident.journal.write("observation", source="sentinel", payload={"sentinel": event.sentinel, "evidence": event.evidence})
+                resident.journal.write(
+                    "observation",
+                    source="sentinel",
+                    payload={"sentinel": event.sentinel, "evidence": event.evidence},
+                )
             resident.baselines.learn(resident.observer.metrics)
             resident.stop()

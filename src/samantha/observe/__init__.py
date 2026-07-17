@@ -1,9 +1,9 @@
 """Observation plane coordinator."""
+
 from __future__ import annotations
 
 import logging
 import queue
-import threading
 from typing import Any
 
 from .logtap import LogTap, StreamTap
@@ -34,7 +34,11 @@ class Observer:
             found = self.metrics.ingest(text)
             self.events.put_nowait({"source": source, "text": text, "metrics": found})
             if found:
-                self.journal.write("observation", source=source, payload={"text": text, "metrics": found})
+                self.journal.write(
+                    "observation",
+                    source=source,
+                    payload={"text": text, "metrics": found},
+                )
         except Exception as exc:
             logging.getLogger("samantha").warning("observation disabled: %s", exc)
             self.disabled = True
@@ -42,4 +46,3 @@ class Observer:
     def stop(self) -> None:
         self.logtap.stop()
         self.streamtap.stop()
-

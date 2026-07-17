@@ -1,4 +1,5 @@
 """Conservative static hot-read candidate analysis."""
+
 from __future__ import annotations
 
 import dis
@@ -29,4 +30,3 @@ class CountingDict(dict):
         if key == self.watched_key:
             self.reads += 1
         return super().__getitem__(key)
-

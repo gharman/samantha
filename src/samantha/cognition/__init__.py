@@ -1,2 +1,1 @@
 """Budgeted LLM cognition."""
-
