@@ -30,7 +30,9 @@ persistent program theory, architecture map, inferred goals, specific watch
 plan, knob candidates, protected areas, and explicit ambiguities before chat is
 considered ready.
 
-State is stored under the platform user-state directory, never in the observed project.
+State is stored under `~/.samantha/<project-id>/`, never in the observed project.
+The directory is created during import with user-only permissions. Set
+`SAMANTHA_STATE_DIR` to override the base directory for tests or custom deployments.
 
 Modes are `off`, `observe`, `advise` (default), and `act`. Actuation additionally
 requires earned per-knob trust. No API key is needed for observe mode or tests.

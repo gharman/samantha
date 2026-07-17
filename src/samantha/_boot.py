@@ -131,6 +131,7 @@ def arm(
         os.getpid(),
         key,
     )
+    LOG.info("memory: %s", state)
     journal.write(
         "observation", source="boot", payload={"mode": config.mode, "project": key}
     )

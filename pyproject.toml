@@ -9,7 +9,7 @@ description = "An import-and-go resident intelligence for Python programs"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
-dependencies = ["platformdirs>=4", "httpx>=0.27"]
+dependencies = ["httpx>=0.27"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]

@@ -40,3 +40,7 @@ Project identity is displayed in full for state correlation, while attachment is
 ## Cold-start comprehension correction
 
 Source discovery now follows the local import closure first and then inventories the remaining project Python files, largest first, under a bounded 500,000-character budget while excluding environments, caches, VCS data, and build artifacts. README, pyproject configuration, docstrings, TODO/FIXME notes, and all daemon directives are included. After provider validation, a dedicated cold-start model call must produce a concrete summary, architecture, goals, watch plan, knob candidates, protected areas, and ambiguities; this becomes `model.md` and a journaled inference. Chat remains explicitly in an analyzing state until this pass succeeds and thereafter receives both the theory and recent journal evidence.
+
+## Visible memory location correction
+
+Persistent state now defaults explicitly to `~/.samantha/<project-id>/` rather than the platform-specific application-state path. Both the base and project directory are created during import with mode 0700 where supported, the resolved path is printed in the startup ritual, and `SAMANTHA_STATE_DIR` continues to take precedence. This makes resident memory discoverable and inspectable without knowing platform directory conventions.

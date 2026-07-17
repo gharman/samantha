@@ -7,7 +7,7 @@ from samantha.observe.census import census
 from samantha.observe.hotread import CountingDict
 from samantha.observe.metrics import MetricStore
 from samantha.observe.source import read_source
-from samantha.state import Journal, redact
+from samantha.state import Journal, redact, state_root
 
 
 def test_redaction_and_journal(tmp_path: Path) -> None:
@@ -81,3 +81,12 @@ def test_source_inventory_follows_local_imports_and_comments(tmp_path: Path) -> 
     inventory = read_source(entry, tmp_path)
     assert "src/demo/worker.py" in inventory["files"]
     assert inventory["directives"] == ["keep queue lag below 20"]
+
+
+def test_default_memory_is_dot_samantha(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("SAMANTHA_STATE_DIR", raising=False)
+    path = state_root("project-key")
+    assert path == tmp_path / ".samantha" / "project-key"
+    assert path.is_dir()
+    assert path.parent.stat().st_mode & 0o077 == 0

@@ -10,17 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from platformdirs import user_state_dir
-except ImportError:  # Allow source-tree/off-mode use before dependencies are installed.
-
-    def user_state_dir(appname: str) -> str:
-        if os.name == "posix" and os.uname().sysname == "Darwin":
-            return str(Path.home() / "Library" / "Application Support" / appname)
-        return str(
-            Path(os.getenv("XDG_STATE_HOME", Path.home() / ".local/state")) / appname
-        )
-
 
 _REDACTIONS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|passw(or)?d)\s*[:=]\s*\S+"),
@@ -47,10 +36,16 @@ def redact(value: Any) -> Any:
 
 def state_root(project_key: str, override: str | Path | None = None) -> Path:
     base = Path(
-        override or os.getenv("SAMANTHA_STATE_DIR") or user_state_dir("samantha")
+        override or os.getenv("SAMANTHA_STATE_DIR") or Path.home() / ".samantha"
     )
     path = base / project_key
     path.mkdir(parents=True, exist_ok=True)
+    if not override and not os.getenv("SAMANTHA_STATE_DIR"):
+        try:
+            base.chmod(0o700)
+            path.chmod(0o700)
+        except OSError:
+            pass
     return path
 
 
