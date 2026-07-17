@@ -33,6 +33,16 @@ def test_fake_cognition_downgrades_intervention(tmp_path: Path) -> None:
     assert [row["type"] for row in rows] == ["wake", "proposal"]
 
 
+def test_fake_cognition_answers_operator(tmp_path: Path) -> None:
+    resident = fake_resident(tmp_path)
+    (tmp_path / "model.md").write_text("A queue worker")
+    cognition = Cognition(
+        resident,
+        FakeLLM({"chat": {"answer": "The queue is currently healthy."}}),
+    )
+    assert cognition.chat("How is the queue?") == "The queue is currently healthy."
+
+
 def test_claim_demotion(tmp_path: Path) -> None:
     source = tmp_path / "code.py"
     source.write_text("def train():\n    return 1\n")

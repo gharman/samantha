@@ -82,3 +82,32 @@ class Cognition:
                 self.resident.journal.write("proposal", **body)
             elif kind == "update_model":
                 (self.resident.state / "model.md").write_text(str(body.get("text", "")))
+
+    def chat(self, text: str) -> str:
+        """Answer a local operator without blocking host code."""
+        context = {
+            "operator_question": text,
+            "mode": self.resident.config.mode,
+            "model": (self.resident.state / "model.md").read_text(errors="replace"),
+        }
+        try:
+            response = self.llm.complete(
+                [
+                    {
+                        "role": "user",
+                        "content": CHARTER
+                        + "\nThe following is a direct operator question. Answer it "
+                        + "concisely using your resident evidence.\n"
+                        + json.dumps(context),
+                    }
+                ],
+                "chat",
+            )
+        except Exception as exc:
+            logging.getLogger("samantha").warning("chat cognition failed: %s", exc)
+            return "I couldn't reach the configured model."
+        return str(
+            response.get("answer")
+            or response.get("assessment")
+            or "I don't have enough evidence yet."
+        )

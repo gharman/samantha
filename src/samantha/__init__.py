@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from ._boot import arm, resident
@@ -67,8 +69,15 @@ def silence(minutes: int = 30) -> None:
         current.quiet_until = __import__("time").time() + minutes * 60
 
 
-if os.getenv("SAMANTHA") != "off":
+def _invoked_as_cli() -> bool:
+    if not sys.argv:
+        return False
+    return Path(sys.argv[0]).name in {"samantha", "samantha.exe", "__main__.py"}
+
+
+if os.getenv("SAMANTHA") != "off" and not _invoked_as_cli():
     try:
-        arm()
+        entry = sys.argv[0] if sys.argv and Path(sys.argv[0]).is_file() else None
+        arm(entry)
     except Exception:  # Importing samantha must never break the host.
         pass

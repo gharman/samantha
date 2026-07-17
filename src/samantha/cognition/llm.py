@@ -1,4 +1,4 @@
-"""Anthropic-compatible provider and deterministic fake."""
+"""OpenAI Responses API provider and deterministic fake."""
 
 from __future__ import annotations
 import json
@@ -23,7 +23,7 @@ class FakeLLM:
         )
 
 
-class AnthropicLLM:
+class OpenAILLM:
     def __init__(self, api_key: str, model: str, base_url: str) -> None:
         self.api_key, self.model, self.base_url = api_key, model, base_url.rstrip("/")
 
@@ -33,10 +33,21 @@ class AnthropicLLM:
         import httpx
 
         response = httpx.post(
-            f"{self.base_url}/v1/messages",
+            f"{self.base_url}/v1/responses",
             timeout=30,
-            headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01"},
-            json={"model": self.model, "max_tokens": 2048, "messages": messages},
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": self.model,
+                "input": messages,
+                "text": {"format": {"type": "json_object"}},
+            },
         )
         response.raise_for_status()
-        return json.loads(response.json()["content"][0]["text"])
+        payload = response.json()
+        text = payload.get("output_text")
+        if not text:
+            text = payload["output"][0]["content"][0]["text"]
+        return json.loads(text)
+
+
+AnthropicLLM = OpenAILLM

@@ -28,3 +28,7 @@ Actuation can reach only explicitly registered Python setters or object attribut
 ## M6
 
 Recurrence identity is a stable textual signature of the affected knob, flag text, or proposal body, and the threshold counts distinct run IDs rather than raw event count. Reports remain useful without an API key by emitting a conservative diff sketch; callers may inject the same structured LLM interface to refine it. Export is an explicit CLI operation and is the only feature that writes an artifact in the current directory.
+
+## Import-first product correction
+
+The installed library now starts its complete resident from a plain `import samantha`; the host is always launched normally. A dependency-free nearest-ancestor `.env` reader supplies `OPENAI_API_KEY` without overriding an existing environment variable. Cognition uses OpenAI's Responses API with a configurable balanced-model default. The console script has one responsibility: discover and attach to an already-running resident socket; operational subcommands and the launch wrapper are no longer public product surfaces.

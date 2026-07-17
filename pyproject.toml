@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "samantha"
 version = "1.0.0"
-description = "A resident, goal-seeking LLM daemon for Python programs"
+description = "An import-and-go resident intelligence for Python programs"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
@@ -27,4 +27,3 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 88
 target-version = "py312"
-

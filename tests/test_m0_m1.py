@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from samantha._boot import Config
 from samantha.identity import fingerprint
 from samantha.observe.census import census
 from samantha.observe.hotread import CountingDict
@@ -36,3 +37,16 @@ def test_function_fingerprint_stable(tmp_path: Path) -> None:
     first = fingerprint(path, "f")
     path.write_text("# comment\ndef f():\n    return 1\n")
     assert fingerprint(path, "f") == first
+
+
+def test_dotenv_openai_key_arms_configuration(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY=test-key\nSAMANTHA_MODEL=test-model\n"
+    )
+    config = Config.resolve()
+    assert config.api_key == "test-key"
+    assert config.model == "test-model"

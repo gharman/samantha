@@ -75,7 +75,22 @@ class ChatServer:
             if message.get("persist"):
                 with (self.resident.state / "goals.md").open("a") as stream:
                     stream.write(goal + "\n")
-        return {"ok": True, "mode": self.resident.config.mode}
+            return {
+                "ok": True,
+                "mode": self.resident.config.mode,
+                "reply": "Goal updated.",
+            }
+        if text and (cognition := getattr(self.resident, "cognition", None)):
+            return {
+                "ok": True,
+                "mode": self.resident.config.mode,
+                "reply": cognition.chat(text),
+            }
+        return {
+            "ok": True,
+            "mode": self.resident.config.mode,
+            "reply": "Cognition is dormant; configure OPENAI_API_KEY in .env.",
+        }
 
     def stop(self) -> None:
         self.running = False

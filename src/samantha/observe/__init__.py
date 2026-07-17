@@ -18,6 +18,7 @@ class Observer:
         self.logtap = LogTap(self.observe)
         self.streamtap = StreamTap(self.observe)
         self.disabled = False
+        self.on_observation: Any = None
 
     def start(self) -> None:
         try:
@@ -39,6 +40,8 @@ class Observer:
                     source=source,
                     payload={"text": text, "metrics": found},
                 )
+            if self.on_observation:
+                self.on_observation(source, text)
         except Exception as exc:
             logging.getLogger("samantha").warning("observation disabled: %s", exc)
             self.disabled = True
