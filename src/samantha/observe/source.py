@@ -53,6 +53,8 @@ def read_source(path: Path, root: Path, budget: int = 180_000) -> dict[str, Any]
             "text": included,
             "docstring": _docstring(included),
             "imports": _imports(included),
+            "outline": _outline(included),
+            "help_strings": _help_strings(included),
         }
         result["directives"].extend(DIRECTIVE.findall(included))
         result["notes"].extend(NOTES.findall(included))
@@ -138,3 +140,44 @@ def _docstring(text: str) -> str | None:
         return ast.get_docstring(ast.parse(text))
     except SyntaxError:
         return None
+
+
+def _outline(text: str) -> list[dict[str, Any]]:
+    """Return top-level source structure without function bodies."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    result = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            item: dict[str, Any] = {
+                "kind": "class" if isinstance(node, ast.ClassDef) else "function",
+                "name": node.name,
+                "line": node.lineno,
+            }
+            docstring = ast.get_docstring(node)
+            if docstring:
+                item["docstring"] = docstring[:500]
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                item["parameters"] = [argument.arg for argument in node.args.args]
+            result.append(item)
+    return result
+
+
+def _help_strings(text: str) -> list[str]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    result = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg in {"help", "description"} and isinstance(
+                keyword.value, ast.Constant
+            ):
+                if isinstance(keyword.value.value, str):
+                    result.append(keyword.value.value[:500])
+    return result

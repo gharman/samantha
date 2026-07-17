@@ -68,7 +68,7 @@ class Cognition:
             "task": "cold_start_program_analysis",
             "operator_goal": self.resident.config.goal,
             "project_root": str(self.resident.root),
-            "source_inventory": inventory,
+            "source_inventory": self._analysis_inventory(inventory),
             "required_response": {
                 "summary": "specific description of what the software does",
                 "architecture": ["important components and their roles"],
@@ -94,6 +94,31 @@ class Cognition:
             "cold_start",
         )
         self._write_model(response, inventory)
+
+    def _analysis_inventory(self, inventory: dict[str, Any]) -> dict[str, Any]:
+        """Compact raw source into a fast but project-wide analysis payload."""
+        files = {}
+        remaining = 70_000
+        entry = inventory.get("entry")
+        for path, details in inventory.get("files", {}).items():
+            excerpt_budget = 8_000 if path == entry else 2_500
+            excerpt = str(details.get("text", ""))[: min(excerpt_budget, remaining)]
+            remaining = max(0, remaining - len(excerpt))
+            files[path] = {
+                "docstring": details.get("docstring"),
+                "imports": details.get("imports", []),
+                "outline": details.get("outline", []),
+                "help_strings": details.get("help_strings", []),
+                "source_excerpt": excerpt,
+            }
+        return {
+            "entry": entry,
+            "files": files,
+            "directives": inventory.get("directives", []),
+            "notes": inventory.get("notes", []),
+            "config": inventory.get("config", {}),
+            "truncated": inventory.get("truncated", []),
+        }
 
     def _write_model(self, analysis: dict[str, Any], inventory: dict[str, Any]) -> None:
         def items(name: str) -> str:
@@ -226,11 +251,14 @@ Analyzed {len(inventory.get("files", {}))} project files.
             )
         if self.provider_ready is False:
             return f"Cognition is unavailable: {self.provider_error}"
+        if self.analysis_ready is not True:
+            return self._inventory_briefing()
         context = {
             "operator_question": text,
             "mode": self.resident.config.mode,
             "model": (self.resident.state / "model.md").read_text(errors="replace"),
             "recent_evidence": self._recent_journal(),
+            "recent_process_activity": self._recent_activity(),
             "cold_start_analysis": (
                 "ready" if self.analysis_ready else f"incomplete: {self.analysis_error}"
             ),
@@ -242,7 +270,11 @@ Analyzed {len(inventory.get("files", {}))} project files.
                         "role": "user",
                         "content": CHARTER
                         + "\nThe following is a direct operator question. Answer it "
-                        + "concisely using your resident evidence.\n"
+                        + "concisely using your resident evidence. The persisted source "
+                        + "theory is evidence and is sufficient for questions about purpose, "
+                        + "architecture, and the watch plan. Never give a blanket 'not enough "
+                        + "evidence' response: distinguish what source establishes from what "
+                        + "live telemetry has not established.\n"
                         + json.dumps(context),
                     }
                 ],
@@ -256,6 +288,65 @@ Analyzed {len(inventory.get("files", {}))} project files.
             or response.get("assessment")
             or "I don't have enough evidence yet."
         )
+
+    def _inventory_briefing(self) -> str:
+        inventory = load_json(self.resident.state / "source-inventory.json", {})
+        files = inventory.get("files", {})
+        entry = str(inventory.get("entry") or "unknown")
+        entry_info = files.get(entry, {})
+        purpose_parts = [entry_info.get("docstring")]
+        purpose_parts.extend(entry_info.get("help_strings", [])[:3])
+        purpose = " ".join(part for part in purpose_parts if part)
+        if not purpose:
+            purpose = "No explicit entry-point purpose found."
+        modules = [path for path in files if path.endswith(".py") and path != entry]
+        directives = inventory.get("directives", [])
+        observations = [
+            row for row in self._recent_journal() if row.get("type") == "observation"
+        ]
+        metrics = sorted(
+            {
+                metric.get("series")
+                for row in observations
+                for metric in row.get("payload", {}).get("metrics", [])
+                if metric.get("series")
+            }
+        )
+        analysis = (
+            "still running"
+            if self.analysis_ready is None
+            else f"incomplete ({self.analysis_error})"
+        )
+        module_text = ", ".join(modules[:12]) or "none discovered"
+        directive_text = "; ".join(map(str, directives)) or "none"
+        live = (
+            f"Observed metric series: {', '.join(metrics)}."
+            if metrics
+            else "No runtime metric activity has been observed yet."
+        )
+        activity = self._recent_activity()
+        recent_lines = [
+            str(item.get("text", "")) for item in activity if item.get("text")
+        ]
+        if recent_lines:
+            live += " Recent process output: " + " | ".join(recent_lines[-5:])
+        return (
+            f"My deeper cold-start analysis is {analysis}, but the source inventory is ready.\n\n"
+            f"Purpose from the entry source: {purpose}\n"
+            f"Entry point: {entry}\n"
+            f"Project files inventoried: {len(files)}\n"
+            f"Key modules discovered: {module_text}\n"
+            f"Operator directives: {directive_text}\n\n"
+            "Until the deeper theory completes, I am watching the program's logs and numeric "
+            "output for exceptions, novel warnings, stalls, aspiration gaps, regressions, "
+            f"cadence drift, and resource growth. {live}"
+        )
+
+    def _recent_activity(self) -> list[dict[str, Any]]:
+        observer = getattr(self.resident, "observer", None)
+        if observer and hasattr(observer, "recent_snapshot"):
+            return observer.recent_snapshot()
+        return []
 
     def _recent_journal(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = []

@@ -34,6 +34,12 @@ Cold-start analysis uses a separate 120-second read timeout, configurable with
 `SAMANTHA_LLM_TIMEOUT`. A theory-building timeout does not mark the provider or
 chat unavailable; it is reported as a retryable analysis failure.
 
+While deeper analysis is pending or has failed, chat returns an immediate source
+briefing built from AST outlines, docstrings, CLI help, imports, directives, and
+the bounded project manifest. It also includes a bounded window of recent host
+output and extracted metrics, so source knowledge and live activity are reported
+separately rather than collapsed into “not enough evidence.”
+
 State is stored under `~/.samantha/<project-id>/`, never in the observed project.
 The directory is created during import with user-only permissions. Set
 `SAMANTHA_STATE_DIR` to override the base directory for tests or custom deployments.

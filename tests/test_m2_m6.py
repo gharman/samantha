@@ -46,6 +46,7 @@ def test_fake_cognition_answers_operator(tmp_path: Path) -> None:
         FakeLLM({"chat": {"answer": "The queue is currently healthy."}}),
     )
     cognition.provider_ready = True
+    cognition.analysis_ready = True
     assert cognition.chat("How is the queue?") == "The queue is currently healthy."
 
 
@@ -95,13 +96,25 @@ def test_analysis_timeout_does_not_disable_provider_or_chat(tmp_path: Path) -> N
             raise TimeoutError("read timed out")
 
     resident = fake_resident(tmp_path)
-    save_json(tmp_path / "source-inventory.json", {"files": {"app.py": {}}})
+    save_json(
+        tmp_path / "source-inventory.json",
+        {
+            "entry": "app.py",
+            "files": {
+                "app.py": {"docstring": "Runs a durable queue."},
+                "worker.py": {"docstring": "Consumes queued work."},
+            },
+        },
+    )
     (tmp_path / "model.md").write_text("Initial deterministic inventory")
     cognition = Cognition(resident, SlowLLM())
     cognition._check_provider()
     assert cognition.provider_ready is True
     assert cognition.analysis_ready is False
-    assert cognition.chat("What do you know?") == "Model request failed: read timed out"
+    reply = cognition.chat("What do you know?")
+    assert "Runs a durable queue" in reply
+    assert "worker.py" in reply
+    assert "No runtime metric activity" in reply
     assert cognition.provider_ready is True
 
 

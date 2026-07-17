@@ -48,3 +48,7 @@ Persistent state now defaults explicitly to `~/.samantha/<project-id>/` rather t
 ## Console entry point and analysis timeout correction
 
 Import-time entry discovery now examines the Python call stack and selects the nearest project application frame outside Samantha, virtual environments, and site-packages, falling back to `sys.argv[0]` only when necessary. This prevents generated console shims such as `.venv/bin/loop` from becoming the analyzed entry point. Provider health and cold-start comprehension have separate states: credential/model validation can remain healthy when theory formation times out, and chat stays usable. LLM reads default to 120 seconds through `SAMANTHA_LLM_TIMEOUT`, while the source payload is prioritized and bounded to 180,000 characters.
+
+## Useful-before-ready correction
+
+Cold-start model input is compacted to a project-wide digest of AST outlines, docstrings, imports, CLI help strings, directives, notes, configuration, and bounded source excerpts, with extra budget assigned to the entry point. Until that analysis succeeds, chat answers from a deterministic inventory briefing rather than invoking the model with an unfinished theory. The briefing states the discovered purpose, entry point, file/module surface, operator directives, watch categories, observed metrics, and recent host output. Once analysis is ready, the chat prompt explicitly treats the persisted source theory as evidence and requires separate statements about source facts versus absent live telemetry.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+from collections import deque
 from typing import Any
 
 from .logtap import LogTap, StreamTap
@@ -15,6 +16,7 @@ class Observer:
         self.journal = journal
         self.metrics = MetricStore()
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
+        self.recent: deque[dict[str, Any]] = deque(maxlen=200)
         self.logtap = LogTap(self.observe)
         self.streamtap = StreamTap(self.observe)
         self.disabled = False
@@ -33,7 +35,9 @@ class Observer:
             return
         try:
             found = self.metrics.ingest(text)
-            self.events.put_nowait({"source": source, "text": text, "metrics": found})
+            event = {"source": source, "text": text[:2_000], "metrics": found}
+            self.events.put_nowait(event)
+            self.recent.append(event)
             if found:
                 self.journal.write(
                     "observation",
@@ -49,3 +53,6 @@ class Observer:
     def stop(self) -> None:
         self.logtap.stop()
         self.streamtap.stop()
+
+    def recent_snapshot(self, limit: int = 50) -> list[dict[str, Any]]:
+        return list(self.recent)[-limit:]

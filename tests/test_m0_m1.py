@@ -73,7 +73,7 @@ def test_source_inventory_follows_local_imports_and_comments(tmp_path: Path) -> 
     package = tmp_path / "src" / "demo"
     package.mkdir(parents=True)
     entry = tmp_path / "app.py"
-    entry.write_text("import demo.worker\n")
+    entry.write_text('import demo.worker\napp(help="Runs the demo queue.")\n')
     (package / "worker.py").write_text(
         '"""Processes jobs from the durable queue."""\n'
         "# daemon: keep queue lag below 20\n"
@@ -82,6 +82,8 @@ def test_source_inventory_follows_local_imports_and_comments(tmp_path: Path) -> 
     inventory = read_source(entry, tmp_path)
     assert "src/demo/worker.py" in inventory["files"]
     assert inventory["directives"] == ["keep queue lag below 20"]
+    assert inventory["files"]["src/demo/worker.py"]["outline"][0]["name"] == "work"
+    assert inventory["files"]["app.py"]["help_strings"] == ["Runs the demo queue."]
 
 
 def test_default_memory_is_dot_samantha(tmp_path: Path, monkeypatch: object) -> None:
