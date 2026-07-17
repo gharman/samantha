@@ -20,3 +20,7 @@ Chat uses one daemon accept thread and handles one local client at a time, which
 ## M4
 
 Claims store the source path, optional enclosing function, and AST-derived fingerprint together. Validation demotes stale facts in place rather than deleting their history. Baselines retain compact envelopes and a conservative semantic direction; they are refreshed at orderly runner shutdown. Forget removes only state snapshots and intentionally preserves append-only journals unless an exported state directory is removed by the operator.
+
+## M5
+
+Actuation can reach only explicitly registered Python setters or object attributes. Numeric bounds are checked again at assignment time, terminal protected/dead states cannot transition, and only trusted knobs are authorized. Probes always attempt exact restoration in a `finally` block. The intervention manager permits one live change and records both prediction and inverse recipe data before outcome evaluation.

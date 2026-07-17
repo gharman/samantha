@@ -83,6 +83,8 @@ def arm(entry: str | Path | None = None, *, force: bool = False, **overrides: ob
     _resident.claims = ClaimStore(state / "claims.json")
     demoted = _resident.claims.validate()
     _resident.baselines = Baselines(state / "baselines.json")
+    from .act.ledger import Ledger
+    _resident.ledger = Ledger(state / "ledger.json")
     for claim in demoted:
         journal.write("demotion", knob=claim, **{"from": "fact", "to": "hypothesis"}, cause="fingerprint changed")
     if not config.api_key and config.mode in {"advise", "act"} and not force:
