@@ -12,3 +12,7 @@ Observation uses synchronous, transparent stream wrappers and a root logging han
 ## M2
 
 Sentinels evaluate bounded metric windows and suppress a signature after its first firing in a run. Cognition is invoked explicitly by the harness, allowing all keyless tests to inject `FakeLLM`; runner shutdown always journals deterministic sentinel evidence. The harness accepts only enumerated structured actions, downgrades unauthorized interventions, and isolates provider or parse failures.
+
+## M3
+
+Chat uses one daemon accept thread and handles one local client at a time, which is sufficient for the single-operator protocol and keeps synchronization small. Each inbound and outbound message is journaled through the common redaction path. The runtime directory must have no group or world permissions; socket files use mode 0600 and are removed on orderly shutdown.
