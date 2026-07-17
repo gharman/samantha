@@ -36,3 +36,7 @@ The installed library now starts its complete resident from a plain `import sama
 ## Startup and operator experience correction
 
 Project identity is displayed in full for state correlation, while attachment is explicitly PID-based. Startup reports the actual entry point, goal/directive inventory, watch set, credential source, and configured model; it no longer emits a generic placeholder theory. The entry source is retained in `model.md` so initial chat questions have useful project context. OpenAI credentials, connectivity, and model access are probed immediately on a daemon cognition thread, preserving non-blocking imports while surfacing sanitized failures before operator chat. The terminal client decodes NDJSON internally and renders a human-readable connection banner and replies.
+
+## Cold-start comprehension correction
+
+Source discovery now follows the local import closure first and then inventories the remaining project Python files, largest first, under a bounded 500,000-character budget while excluding environments, caches, VCS data, and build artifacts. README, pyproject configuration, docstrings, TODO/FIXME notes, and all daemon directives are included. After provider validation, a dedicated cold-start model call must produce a concrete summary, architecture, goals, watch plan, knob candidates, protected areas, and ambiguities; this becomes `model.md` and a journaled inference. Chat remains explicitly in an analyzing state until this pass succeeds and thereafter receives both the theory and recent journal evidence.

@@ -23,6 +23,12 @@ is launched normally; it does not need to be wrapped by a Samantha command.
 Startup identifies the full project and attach PID, summarizes the entry source
 and active watch set, and asynchronously validates OpenAI credentials and model
 access. Provider failures are reported at startup with a sanitized API error.
+After validation, Samantha follows local imports and inventories the bounded
+project source surface, README, configuration, docstrings, TODO/FIXME notes, and
+`# daemon:` directives. A cold-start model pass turns that material into a
+persistent program theory, architecture map, inferred goals, specific watch
+plan, knob candidates, protected areas, and explicit ambiguities before chat is
+considered ready.
 
 State is stored under the platform user-state directory, never in the observed project.
 

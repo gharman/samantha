@@ -8,7 +8,7 @@ from samantha.cognition.harness import Cognition
 from samantha.cognition.llm import FakeLLM
 from samantha.report import generate
 from samantha.sentinels import WakeEvent
-from samantha.state import Journal
+from samantha.state import Journal, save_json
 
 
 def fake_resident(tmp_path: Path, mode: str = "advise") -> SimpleNamespace:
@@ -17,9 +17,14 @@ def fake_resident(tmp_path: Path, mode: str = "advise") -> SimpleNamespace:
         max_wakes_per_hour=6,
         token_budget_per_day=1000,
         flag_budget=3,
+        model="test-model",
+        goal=None,
     )
     return SimpleNamespace(
-        config=config, journal=Journal(tmp_path, "run"), state=tmp_path
+        config=config,
+        journal=Journal(tmp_path, "run"),
+        state=tmp_path,
+        root=tmp_path,
     )
 
 
@@ -40,6 +45,7 @@ def test_fake_cognition_answers_operator(tmp_path: Path) -> None:
         resident,
         FakeLLM({"chat": {"answer": "The queue is currently healthy."}}),
     )
+    cognition.provider_ready = True
     assert cognition.chat("How is the queue?") == "The queue is currently healthy."
 
 
@@ -52,6 +58,32 @@ def test_provider_failure_is_available_to_chat(tmp_path: Path) -> None:
     cognition = Cognition(resident, BrokenLLM())
     cognition._check_provider()
     assert cognition.chat("hello") == "Cognition is unavailable: invalid model"
+
+
+def test_cold_start_builds_specific_program_theory(tmp_path: Path) -> None:
+    resident = fake_resident(tmp_path)
+    save_json(
+        tmp_path / "source-inventory.json",
+        {"files": {"worker.py": {"text": "def drain_queue(): pass"}}},
+    )
+    cognition = Cognition(
+        resident,
+        FakeLLM(
+            {
+                "cold_start": {
+                    "summary": "A durable queue worker.",
+                    "architecture": ["worker.drain_queue consumes jobs"],
+                    "goals": ["keep queue lag low"],
+                    "watching": ["queue lag", "failed jobs"],
+                }
+            }
+        ),
+    )
+    cognition._check_provider()
+    model = (tmp_path / "model.md").read_text()
+    assert cognition.provider_ready is True
+    assert "durable queue worker" in model
+    assert "queue lag" in model
 
 
 def test_claim_demotion(tmp_path: Path) -> None:

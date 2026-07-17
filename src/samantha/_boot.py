@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .identity import discover_project
-from .state import Journal, state_root
+from .state import Journal, save_json, state_root
 
 LOG = logging.getLogger("samantha")
 _resident: Resident | None = None
@@ -146,6 +146,7 @@ def arm(
             from .observe.source import read_source
 
             inventory = read_source(Path(entry).resolve(), root)
+            save_json(state / "source-inventory.json", inventory)
             docstring = next(
                 (v["docstring"] for v in inventory["files"].values() if v["docstring"]),
                 None,
@@ -168,8 +169,9 @@ def arm(
             (state / "goals.md").touch(exist_ok=True)
             goal_status = config.goal or "not specified"
             LOG.info(
-                "source: %s · goal: %s · directives: %s",
+                "source: %s · files inventoried: %s · goal: %s · directives: %s",
                 relative_entry,
+                len(inventory["files"]),
                 goal_status,
                 len(inventory["directives"]),
             )

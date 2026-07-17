@@ -6,6 +6,7 @@ from samantha.identity import fingerprint
 from samantha.observe.census import census
 from samantha.observe.hotread import CountingDict
 from samantha.observe.metrics import MetricStore
+from samantha.observe.source import read_source
 from samantha.state import Journal, redact
 
 
@@ -65,3 +66,18 @@ def test_dotenv_can_be_loaded_from_discovered_root(
     config = Config.resolve(_dotenv_start=project)
     assert config.api_key == "root-key"
     assert config.dotenv_file == str(project / ".env")
+
+
+def test_source_inventory_follows_local_imports_and_comments(tmp_path: Path) -> None:
+    package = tmp_path / "src" / "demo"
+    package.mkdir(parents=True)
+    entry = tmp_path / "app.py"
+    entry.write_text("import demo.worker\n")
+    (package / "worker.py").write_text(
+        '"""Processes jobs from the durable queue."""\n'
+        "# daemon: keep queue lag below 20\n"
+        "def work():\n    return 1\n"
+    )
+    inventory = read_source(entry, tmp_path)
+    assert "src/demo/worker.py" in inventory["files"]
+    assert inventory["directives"] == ["keep queue lag below 20"]
