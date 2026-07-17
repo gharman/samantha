@@ -46,10 +46,13 @@ class ActController:
                 }
             )
             mutated = any(
-                result.op not in {"search", "inspect"} and result.ok
-                for result in group.results
+                result.ok and self._is_write(operation)
+                for operation, result in zip(operations, group.results, strict=False)
             )
-            if mutated:
+            read_answer = plan.get("intent") == "inspect" and any(
+                result.ok for result in group.results
+            )
+            if mutated or read_answer:
                 receipt = self._receipt(group, "")
                 answer = self._final_answer(
                     operator_text,
@@ -85,9 +88,15 @@ class ActController:
                 "intercept": (
                     "wrap an assignable existing callable. kwargs_json overrides named "
                     "arguments. value_json may contain when (argument equality map), "
-                    "result_replace (string replacement map), result_update (mapping merge), "
+                    "argument_update (argument-name to mapping merge), argument_append "
+                    "(argument-name to field/value append map), result_replace (string "
+                    "replacement map), result_update (mapping merge), "
                     "and receipt. one_shot restores after the first matching invocation; "
                     "process persists"
+                ),
+                "rewrite_output": (
+                    "rewrite matching future stdout/stderr text. value_json requires match "
+                    "and replace and may specify source; supports one_shot or process lifetime"
                 ),
                 "emit": "write an operator-visible receipt through Samantha's host logger",
             },
@@ -99,8 +108,12 @@ class ActController:
             "instructions": (
                 "Choose converse for ordinary conversation. Choose inspect when more runtime "
                 "information is required. Choose act only for operations that advance the "
-                "request. Encode values/args/kwargs as JSON strings. Select contextual "
-                "lifetime from intent. Never state an unverified result in reply."
+                "request. Mark every operation effect read or write. A read-only call does "
+                "not fulfill a requested action, so continue planning from its result. For "
+                "future behavior, intercept the future consumer/call and patch its arguments "
+                "instead of changing an already-consumed value. Encode values/args/kwargs as "
+                "JSON strings. Select contextual lifetime from intent. Never state an "
+                "unverified result in reply."
             ),
         }
 
@@ -201,6 +214,13 @@ class ActController:
         if reply:
             lines.extend(["", reply])
         return "\n".join(lines)
+
+    @staticmethod
+    def _is_write(operation: dict[str, Any]) -> bool:
+        op = str(operation.get("op", ""))
+        if op == "call":
+            return operation.get("effect") == "write"
+        return op in {"set", "append", "enqueue", "intercept", "rewrite_output", "emit"}
 
     def _plain_fallback(self, operator_text: str) -> str:
         messages = [

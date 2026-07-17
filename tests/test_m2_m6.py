@@ -176,6 +176,8 @@ def test_action_plan_uses_fixed_operation_vocabulary() -> None:
     operation = output["schema"]["properties"]["operations"]["items"]
     assert output["strict"] is True
     assert "intercept" in operation["properties"]["op"]["enum"]
+    assert "rewrite_output" in operation["properties"]["op"]["enum"]
+    assert "effect" in operation["required"]
     assert "exec" not in operation["properties"]["op"]["enum"]
 
 

@@ -28,6 +28,7 @@ class Config:
     flag_budget: int = 3
     dotenv_file: str | None = None
     llm_timeout: float = 120.0
+    log_level: str = "INFO"
 
     @classmethod
     def resolve(cls, **overrides: object) -> "Config":
@@ -47,6 +48,11 @@ class Config:
             flag_budget=int(os.getenv("SAMANTHA_FLAG_BUDGET", "3")),
             dotenv_file=str(dotenv_file) if dotenv_file else None,
             llm_timeout=float(os.getenv("SAMANTHA_LLM_TIMEOUT", "120")),
+            log_level=(
+                "OFF"
+                if _truthy(os.getenv("SAMANTHA_QUIET"))
+                else os.getenv("SAMANTHA_LOG_LEVEL", "INFO").upper()
+            ),
         )
         values.update({k: v for k, v in overrides.items() if v is not None})
         if values["mode"] not in {"off", "observe", "advise", "act"}:
@@ -86,12 +92,18 @@ class Resident:
                 component.stop()
 
 
-def _logging() -> None:
+def _truthy(value: str | None) -> bool:
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
+def _logging(config: Config) -> None:
     if not LOG.handlers:
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("[samantha] %(message)s"))
         LOG.addHandler(handler)
-    LOG.setLevel(logging.INFO)
+    level = config.log_level.upper()
+    LOG.disabled = level == "OFF"
+    LOG.setLevel(getattr(logging, level, logging.INFO))
     LOG.propagate = False
 
 
@@ -105,7 +117,7 @@ def arm(
         return None
     if _resident:
         return _resident
-    _logging()
+    _logging(config)
     state = state_root(key, config.state_dir)
     journal = Journal(state)
     _resident = Resident(config, root, key, journal, state)

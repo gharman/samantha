@@ -1,3 +1,4 @@
+import io
 import queue
 import sys
 import types
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 from samantha.act.controller import ActController
 from samantha.act.ledger import Ledger
 from samantha.act.runtime import RuntimeOperator
+from samantha.observe.logtap import Tee
 from samantha.state import Journal
 
 
@@ -29,6 +31,12 @@ def runtime_module(tmp_path: Path, monkeypatch: object) -> types.ModuleType:
 
     render.__module__ = module.__name__
     module.render = render
+
+    def route(stage: str, payload: dict[str, object]) -> dict[str, object]:
+        return payload
+
+    route.__module__ = module.__name__
+    module.route = route
     monkeypatch.setitem(sys.modules, module.__name__, module)
     return module
 
@@ -139,6 +147,62 @@ def test_conditional_result_transform_changes_only_matching_calls(
     assert module.render("critique", "case") == "# Critique\ncase"
 
 
+def test_one_shot_interceptor_patches_future_matching_payload(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    original = module.route
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "make the next generated item about puppies",
+        [
+            {
+                "op": "intercept",
+                "path": "module:runtime_demo::route",
+                "value": {
+                    "when": {"stage": "generate"},
+                    "argument_append": {
+                        "payload": {"constraints": "The idea must be about puppies."}
+                    },
+                },
+                "lifetime": "one_shot",
+            }
+        ],
+        "one_shot",
+    )
+    assert group.results[0].verified
+    assert module.route("steelman", {"constraints": ["buildable"]}) == {
+        "constraints": ["buildable"]
+    }
+    assert module.route is not original
+    assert module.route("generate", {"constraints": ["buildable"]}) == {
+        "constraints": ["buildable", "The idea must be about puppies."]
+    }
+    assert module.route is original
+
+
+def test_one_shot_output_rewrite_is_specific_and_expires() -> None:
+    output = io.StringIO()
+    rules = [
+        {
+            "id": "test",
+            "match": "steelman",
+            "replace": "greg is the STEEL MAN",
+            "source": "stdout",
+            "lifetime": "one_shot",
+            "applications": 0,
+        }
+    ]
+    stream = Tee(output, "stdout", lambda source, line: None, rules)
+    stream.write("#43 critique\n")
+    stream.write("#43 steelman\n")
+    stream.write("#44 steelman\n")
+    assert output.getvalue() == (
+        "#43 critique\n#43 greg is the STEEL MAN\n#44 steelman\n"
+    )
+    assert rules == []
+
+
 class PlannedLLM:
     def plan_action(self, messages: object) -> dict[str, object]:
         return {
@@ -149,6 +213,7 @@ class PlannedLLM:
             "operations": [
                 {
                     "op": "set",
+                    "effect": "write",
                     "path": 'module:runtime_demo::config/"topic"',
                     "query": None,
                     "value_json": '"neuroevolutionary AI"',
@@ -178,13 +243,14 @@ class ResultLLM:
 
     def plan_action(self, messages: object) -> dict[str, object]:
         return {
-            "intent": "act",
+            "intent": "inspect",
             "reply": "I’ll retrieve it.",
             "done": True,
             "lifetime": "one_shot",
             "operations": [
                 {
                     "op": "call",
+                    "effect": "read",
                     "path": "module:runtime_demo::generate",
                     "query": None,
                     "value_json": None,
@@ -239,3 +305,53 @@ def test_act_planner_receives_prior_chat_history(
     assert reply == "Idea 41 is still the active subject."
     assert "assess idea 41" in llm.context
     assert "retrieving idea 41" in llm.context
+
+
+def test_read_call_does_not_complete_an_action_request(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+
+    class InspectThenActLLM:
+        calls = 0
+
+        def plan_action(self, messages: object) -> dict[str, object]:
+            self.calls += 1
+            operation = (
+                {
+                    "op": "call",
+                    "effect": "read",
+                    "path": "module:runtime_demo::generate",
+                    "query": None,
+                    "value_json": None,
+                    "args_json": None,
+                    "kwargs_json": None,
+                    "lifetime": "contextual",
+                    "reason": "inspect behavior",
+                }
+                if self.calls == 1
+                else {
+                    "op": "set",
+                    "effect": "write",
+                    "path": 'module:runtime_demo::config/"topic"',
+                    "query": None,
+                    "value_json": '"puppies"',
+                    "args_json": None,
+                    "kwargs_json": None,
+                    "lifetime": "one_shot",
+                    "reason": "apply requested behavior",
+                }
+            )
+            return {
+                "intent": "act",
+                "reply": "",
+                "done": True,
+                "lifetime": "contextual",
+                "operations": [operation],
+            }
+
+    llm = InspectThenActLLM()
+    reply = ActController(resident(tmp_path), llm).handle("make it puppies")
+    assert llm.calls == 2
+    assert module.config["topic"] == "puppies"
+    assert "assignment verified" in reply

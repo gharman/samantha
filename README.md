@@ -45,6 +45,12 @@ State is stored under `~/.samantha/<project-id>/`, never in the observed project
 The directory is created during import with user-only permissions. Set
 `SAMANTHA_STATE_DIR` to override the base directory for tests or custom deployments.
 
+Set `SAMANTHA_QUIET=1` in the host program's environment (or its `.env`) to
+suppress Samantha's `[samantha]` console messages. This setting belongs to the
+program importing Samantha, not the later attach CLI. For selective visibility,
+use `SAMANTHA_LOG_LEVEL=WARNING`, `ERROR`, or `CRITICAL` instead; `INFO` is the
+default and `OFF` suppresses all Samantha logger output.
+
 Modes are `off`, `observe`, `advise` (default), and `act`. Actuation additionally
 requires an explicit `SAMANTHA=act` in the host process. No API key is needed for
 observe mode or tests.
@@ -56,8 +62,11 @@ audited generic operations can inspect/search paths, assign attributes or items,
 append/enqueue values, invoke existing project callables, install fixed argument
 interceptors, and emit operator receipts. It never executes model-authored code.
 Interceptors can match named argument values and declaratively transform string
-or mapping results, enabling narrow presentation/runtime changes without source
-editing or unconditional relabeling.
+or mapping results. They can also merge or append values inside a future call's
+mapping arguments, so a one-shot generation constraint is attached where it will
+actually be consumed instead of being added to an already-running batch. Audited
+stdout/stderr rewrite rules support narrow future presentation changes such as a
+single phase label without modifying source or requiring an application handler.
 
 Related operations form an intervention group with an inferred `one_shot`,
 `temporary`, `process`, `until_failure`, or contextual lifetime. Successful

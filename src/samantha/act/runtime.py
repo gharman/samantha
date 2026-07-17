@@ -116,6 +116,13 @@ class RuntimeOperator:
             return OperationResult(
                 op, "samantha.logger", True, "receipt emitted", True, message
             )
+        if op == "rewrite_output":
+            try:
+                return self._rewrite_output(group, operation)
+            except Exception as exc:
+                return OperationResult(
+                    op, "stdio", False, f"{type(exc).__name__}: {exc}"
+                )
         try:
             node = self.graph.get(path)
         except KeyError as exc:
@@ -218,21 +225,28 @@ class RuntimeOperator:
             condition = metadata.get("when", {}) if isinstance(metadata, dict) else {}
             matches = _matches(bound.arguments, condition)
             if matches:
+                _patch_arguments(bound.arguments, metadata)
                 for name, value in overrides.items():
                     if name in signature.parameters:
                         bound.arguments[name] = value
                     else:
-                        accepts_kwargs = any(
-                            parameter.kind is inspect.Parameter.VAR_KEYWORD
-                            for parameter in signature.parameters.values()
+                        var_keyword = next(
+                            (
+                                name
+                                for name, parameter in signature.parameters.items()
+                                if parameter.kind is inspect.Parameter.VAR_KEYWORD
+                            ),
+                            None,
                         )
-                        if not accepts_kwargs:
+                        if not var_keyword:
                             raise TypeError(f"callable has no argument named {name}")
-                        kwargs[name] = value
+                        extras = dict(bound.arguments.get(var_keyword, {}))
+                        extras[name] = value
+                        bound.arguments[var_keyword] = extras
             if matches and lifetime == "one_shot" and not restored:
                 node.write(original)
                 restored = True
-            result = original(*bound.args, **bound.kwargs, **kwargs)
+            result = original(*bound.args, **bound.kwargs)
             if matches and isinstance(metadata, dict):
                 result = _transform_result(result, metadata)
             receipt = metadata.get("receipt") if isinstance(metadata, dict) else None
@@ -256,6 +270,31 @@ class RuntimeOperator:
             f"installed {lifetime} argument interceptor",
             verified,
             {"overrides": overrides, "lifetime": lifetime},
+        )
+
+    def _rewrite_output(
+        self, group: InterventionGroup, operation: dict[str, Any]
+    ) -> OperationResult:
+        value = operation.get("value") or {}
+        if not isinstance(value, dict) or not value.get("match"):
+            raise ValueError("output rewrite requires match and replace")
+        observer = getattr(self.resident, "observer", None)
+        if not observer or not hasattr(observer, "add_output_rewrite"):
+            raise RuntimeError("output observation is unavailable")
+        lifetime = str(operation.get("lifetime") or group.lifetime)
+        rule = observer.add_output_rewrite(
+            str(value["match"]),
+            str(value.get("replace", "")),
+            value.get("source"),
+            lifetime,
+        )
+        return OperationResult(
+            "rewrite_output",
+            "stdio",
+            True,
+            f"installed {lifetime} output rewrite",
+            True,
+            rule,
         )
 
     def _protected(self, path: str) -> bool:
@@ -301,6 +340,29 @@ def _matches(arguments: dict[str, Any], condition: Any) -> bool:
     if not isinstance(condition, dict) or not condition:
         return True
     return all(arguments.get(name) == expected for name, expected in condition.items())
+
+
+def _patch_arguments(arguments: dict[str, Any], metadata: Any) -> None:
+    if not isinstance(metadata, dict):
+        return
+    updates = metadata.get("argument_update", {})
+    if isinstance(updates, dict):
+        for argument, patch in updates.items():
+            current = arguments.get(argument)
+            if isinstance(current, dict) and isinstance(patch, dict):
+                arguments[argument] = {**current, **patch}
+    appends = metadata.get("argument_append", {})
+    if isinstance(appends, dict):
+        for argument, fields in appends.items():
+            current = arguments.get(argument)
+            if not isinstance(current, dict) or not isinstance(fields, dict):
+                continue
+            changed = dict(current)
+            for field, value in fields.items():
+                existing = changed.get(field)
+                if isinstance(existing, list):
+                    changed[field] = [*existing, value]
+            arguments[argument] = changed
 
 
 def _transform_result(result: Any, metadata: dict[str, Any]) -> Any:

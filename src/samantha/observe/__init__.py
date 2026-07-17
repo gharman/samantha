@@ -56,3 +56,12 @@ class Observer:
 
     def recent_snapshot(self, limit: int = 50) -> list[dict[str, Any]]:
         return list(self.recent)[-limit:]
+
+    def add_output_rewrite(
+        self,
+        match: str,
+        replace: str,
+        source: str | None = None,
+        lifetime: str = "process",
+    ) -> dict[str, Any]:
+        return self.streamtap.add_rewrite(match, replace, source, lifetime)

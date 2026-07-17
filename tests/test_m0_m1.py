@@ -69,6 +69,14 @@ def test_dotenv_can_be_loaded_from_discovered_root(
     assert config.dotenv_file == str(project / ".env")
 
 
+def test_quiet_environment_disables_resident_console_logging(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.setenv("SAMANTHA_QUIET", "true")
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.log_level == "OFF"
+
+
 def test_source_inventory_follows_local_imports_and_comments(tmp_path: Path) -> None:
     package = tmp_path / "src" / "demo"
     package.mkdir(parents=True)
