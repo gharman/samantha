@@ -63,6 +63,7 @@ def connect(path: Path) -> int:
                 kind = "bye" if line.strip() in {"bye", "quit", "exit"} else "command"
                 message = json.dumps({"type": kind, "text": line}) + "\n"
                 client.sendall(message.encode())
+                print("Samantha is working…", flush=True)
                 response = _message(incoming.readline())
                 print(response.get("reply") or response.get("error") or "No response.")
                 print()

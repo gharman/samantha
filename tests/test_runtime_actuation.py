@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from samantha.act.controller import ActController
+from samantha.act.introspect import RuntimeGraph
 from samantha.act.ledger import Ledger
 from samantha.act.runtime import RuntimeOperator
 from samantha.observe.logtap import Tee
@@ -22,6 +23,14 @@ def runtime_module(tmp_path: Path, monkeypatch: object) -> types.ModuleType:
     module.requests = queue.Queue()
     module.encode = json.dumps
     module.danger = eval
+
+    class Worker:
+        def __init__(self) -> None:
+            self.topic = "general"
+            self.pending: list[str] = []
+
+    Worker.__module__ = module.__name__
+    module.Worker = Worker
 
     def generate(topic: str = "default") -> str:
         return topic
@@ -42,6 +51,22 @@ def runtime_module(tmp_path: Path, monkeypatch: object) -> types.ModuleType:
     module.route = route
     monkeypatch.setitem(sys.modules, module.__name__, module)
     return module
+
+
+def test_suspended_project_instances_are_discoverable(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    worker = module.Worker()
+    graph = RuntimeGraph(tmp_path).refresh()
+    paths = [
+        path
+        for path in graph.nodes
+        if path.startswith("object:runtime_demo.") and path.endswith(f":{id(worker)}")
+    ]
+    assert paths
+    assert graph.get(f"{paths[0]}/topic").read() == "general"
+    assert worker.topic == "general"
 
 
 def resident(tmp_path: Path) -> SimpleNamespace:
@@ -148,6 +173,41 @@ def test_conditional_result_transform_changes_only_matching_calls(
     assert group.results[0].verified
     assert module.render("steelman", "case") == "# Steelman for Greg\ncase"
     assert module.render("critique", "case") == "# Critique\ncase"
+
+
+def test_conditional_argument_transform_changes_live_progress_message(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    seen: list[str] = []
+
+    def progress(message: str) -> None:
+        seen.append(message)
+
+    progress.__module__ = module.__name__
+    module.progress = progress
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "rename the steelman progress phase",
+        [
+            {
+                "op": "intercept",
+                "path": "module:runtime_demo::progress",
+                "value": {
+                    "when_contains": {"message": "steelman"},
+                    "argument_replace": {
+                        "message": {"steelman": "Greg is THE STEEL MAN"}
+                    },
+                },
+                "lifetime": "process",
+            }
+        ],
+        "process",
+    )
+    assert group.results[0].verified
+    module.progress("#45 research")
+    module.progress("#45 steelman")
+    assert seen == ["#45 research", "#45 Greg is THE STEEL MAN"]
 
 
 def test_one_shot_interceptor_patches_future_matching_payload(

@@ -228,7 +228,10 @@ class RuntimeOperator:
             nonlocal output_rewrite_activated, restored
             bound = signature.bind_partial(*args, **kwargs)
             condition = metadata.get("when", {}) if isinstance(metadata, dict) else {}
-            matches = _matches(bound.arguments, condition)
+            contains = (
+                metadata.get("when_contains", {}) if isinstance(metadata, dict) else {}
+            )
+            matches = _matches(bound.arguments, condition, contains)
             if matches:
                 _patch_arguments(bound.arguments, metadata)
                 for name, value in overrides.items():
@@ -309,8 +312,8 @@ class RuntimeOperator:
             "rewrite_output",
             "stdio",
             True,
-            f"installed {lifetime} output rewrite",
-            True,
+            f"registered {lifetime} output rewrite; host stream path not yet verified",
+            False,
             rule,
         )
 
@@ -375,10 +378,15 @@ def _json_safe(value: Any) -> Any:
     return _preview(value)
 
 
-def _matches(arguments: dict[str, Any], condition: Any) -> bool:
-    if not isinstance(condition, dict) or not condition:
-        return True
-    return all(arguments.get(name) == expected for name, expected in condition.items())
+def _matches(arguments: dict[str, Any], condition: Any, contains: Any = None) -> bool:
+    equal = not isinstance(condition, dict) or all(
+        arguments.get(name) == expected for name, expected in condition.items()
+    )
+    includes = not isinstance(contains, dict) or all(
+        str(expected) in str(arguments.get(name, ""))
+        for name, expected in contains.items()
+    )
+    return equal and includes
 
 
 def _patch_arguments(arguments: dict[str, Any], metadata: Any) -> None:
@@ -390,6 +398,15 @@ def _patch_arguments(arguments: dict[str, Any], metadata: Any) -> None:
             current = arguments.get(argument)
             if isinstance(current, dict) and isinstance(patch, dict):
                 arguments[argument] = {**current, **patch}
+    replacements = metadata.get("argument_replace", {})
+    if isinstance(replacements, dict):
+        for argument, mapping in replacements.items():
+            current = arguments.get(argument)
+            if not isinstance(current, str) or not isinstance(mapping, dict):
+                continue
+            for old, new in mapping.items():
+                current = current.replace(str(old), str(new))
+            arguments[argument] = current
     appends = metadata.get("argument_append", {})
     if isinstance(appends, dict):
         for argument, fields in appends.items():

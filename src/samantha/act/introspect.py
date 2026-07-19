@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import gc
 import sys
 import types
 from dataclasses import dataclass
@@ -49,8 +50,11 @@ class RuntimeGraph:
     def refresh(self) -> "RuntimeGraph":
         self.nodes.clear()
         self._seen.clear()
-        self._modules()
+        # Active frames contain the objects that can affect what the program is doing now.
+        # Index them before the broader module surface so bounded planner views retain them.
         self._frames()
+        self._objects()
+        self._modules()
         return self
 
     def snapshot(
@@ -119,6 +123,37 @@ class RuntimeGraph:
                         self._add(LiveNode(f"{prefix}::{name}", value), 0)
                 frame = frame.f_back
                 depth += 1
+
+    def _objects(self) -> None:
+        """Find project instances even when their coroutine frames are suspended."""
+        project_types: set[type[Any]] = set()
+        for module in list(sys.modules.values()):
+            if not isinstance(module, types.ModuleType) or not self._project_module(
+                module
+            ):
+                continue
+            project_types.update(
+                value
+                for value in _safe_vars(module).values()
+                if isinstance(value, type)
+            )
+        if not project_types:
+            return
+        added = 0
+        for value in gc.get_objects():
+            if added >= 1_000 or len(self.nodes) >= self.max_nodes:
+                return
+            try:
+                kind = type(value)
+                if kind not in project_types:
+                    continue
+                path = f"object:{kind.__module__}.{kind.__qualname__}:{id(value)}"
+                before = len(self.nodes)
+                self._add(LiveNode(path, value), 0)
+                if len(self.nodes) > before:
+                    added += 1
+            except Exception:
+                continue
 
     def _add(self, node: LiveNode, depth: int) -> None:
         if len(self.nodes) >= self.max_nodes or node.path in self.nodes:

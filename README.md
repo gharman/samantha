@@ -77,6 +77,10 @@ single phase label without modifying source or requiring an application handler.
 An interceptor can activate an output rewrite only when its matching future call
 occurs, coupling a deferred state change and its presentation rather than racing
 independent “next event” rules against already-queued work.
+When a live progress, rendering, or printing callback is reachable, Samantha
+intercepts that callable directly and can condition changes on message content.
+Raw stdout/stderr rewriting is a fallback because console libraries may bypass
+Python's current `sys.stdout` or `sys.stderr` wrappers.
 
 Related operations form an intervention group with an inferred `one_shot`,
 `temporary`, `process`, `until_failure`, or contextual lifetime. Successful
@@ -110,6 +114,9 @@ samantha --pid 1234  # selects a resident explicitly
 
 The interactive client supports up/down-arrow history through `readline` and
 persists the last 1,000 prompts in `~/.samantha/cli-history` with mode 0600.
+It prints `Samantha is working…` immediately after sending a request because act
+mode may require several sequential model-assisted inspection rounds; cold-start
+analysis runs on a separate background thread and does not gate attached chat.
 Chat is a normal plain-text model conversation even while deeper source analysis
 is incomplete; structured JSON is reserved for internal cognition actions.
 

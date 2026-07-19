@@ -97,16 +97,19 @@ class ActController:
                 "intercept": (
                     "wrap an assignable existing callable. kwargs_json overrides named "
                     "arguments. value_json may contain when (argument equality map), "
+                    "when_contains (argument substring map), "
                     "argument_update (argument-name to mapping merge), argument_append "
-                    "(argument-name to field/value append map), result_replace (string "
+                    "(argument-name to field/value append map), argument_replace "
+                    "(argument-name to string replacement map), result_replace (string "
                     "replacement map), result_update (mapping merge), "
                     "activate_output_rewrite (a future output rewrite specification), and "
                     "receipt. one_shot restores after the first matching invocation; "
                     "process persists"
                 ),
                 "rewrite_output": (
-                    "rewrite matching future stdout/stderr text. value_json requires match "
-                    "and replace and may specify source; supports one_shot or process lifetime"
+                    "fallback for text that has no reachable emitting callable: rewrite "
+                    "matching future stdout/stderr text. Registration does not prove the host "
+                    "writes through the tapped stream"
                 ),
                 "emit": "write an operator-visible receipt through Samantha's host logger",
             },
@@ -129,7 +132,9 @@ class ActController:
                 "when reachable objects or the application's own APIs can perform the task. "
                 "For coupled future changes, activate presentation rewrites from the same "
                 "future-call interceptor instead of installing independent next-event rules. "
-                "Use source null for output rewrites unless the stream is verified."
+                "Prefer intercepting a live progress/render/print callback and transforming "
+                "its message argument; use raw output rewriting only when no emitting callable "
+                "is reachable, and use source null unless the stream is verified."
             ),
         }
 
