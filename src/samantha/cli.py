@@ -7,7 +7,9 @@ import atexit
 import json
 import os
 import socket
+import time
 from pathlib import Path
+from typing import Any
 
 
 def runtime_dir() -> Path:
@@ -62,9 +64,15 @@ def connect(path: Path) -> int:
             while line := input("samantha> "):
                 kind = "bye" if line.strip() in {"bye", "quit", "exit"} else "command"
                 message = json.dumps({"type": kind, "text": line}) + "\n"
-                client.sendall(message.encode())
+                try:
+                    client.sendall(message.encode())
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    return _continue_detached(hello, line, delivered=False)
                 print("Samantha is working…", flush=True)
-                response = _message(incoming.readline())
+                payload = incoming.readline()
+                if not payload:
+                    return _continue_detached(hello, line, delivered=True)
+                response = _message(payload)
                 print(response.get("reply") or response.get("error") or "No response.")
                 print()
                 if kind == "bye":
@@ -72,6 +80,113 @@ def connect(path: Path) -> int:
         except (EOFError, KeyboardInterrupt):
             pass
     return 0
+
+
+def _continue_detached(
+    hello: dict[str, object],
+    pending: str | None = None,
+    *,
+    delivered: bool = False,
+) -> int:
+    """Continue a memory-backed conversation after the resident process exits."""
+    pid = hello.get("pid", "unknown")
+    print(f"\nThe host process {pid} is no longer active.")
+    print(
+        "Continuing in detached chat mode; live inspection and actions are unavailable.\n"
+    )
+    delivery_note = (
+        "The last message was sent, but the process ended before returning a response; its "
+        "effects are unknown and must not be claimed."
+        if delivered
+        else "The last message was not delivered to the resident process."
+    )
+    root = Path(str(hello.get("root") or Path.cwd())).resolve()
+    project = str(hello.get("project") or "unknown")
+    try:
+        from samantha._boot import Config
+        from samantha.cognition.llm import OpenAILLM
+        from samantha.state import Journal, state_root
+
+        config = Config.resolve(_dotenv_start=root)
+        if not config.api_key:
+            print(
+                "Detached chat is unavailable because no model credentials were found."
+            )
+            return 0
+        model = str(hello.get("model") or config.model)
+        llm = OpenAILLM(config.api_key, model, config.base_url, config.llm_timeout)
+        state = state_root(project, config.state_dir)
+        journal = Journal(state, f"detached-{int(time.time())}-{os.getpid()}")
+        theory = _read_text(state / "model.md", 30_000)
+        history = _detached_history(state)
+    except Exception as exc:
+        print(f"Detached chat could not start: {exc}")
+        return 0
+
+    line = pending
+    while True:
+        try:
+            line = line if line is not None else input("samantha (detached)> ")
+        except (EOFError, KeyboardInterrupt):
+            return 0
+        if not line or line.strip() in {"bye", "quit", "exit"}:
+            return 0
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "The observed Python process has ended. Continue Samantha's conversation "
+                    "using persisted project memory, but do not claim live inspection, runtime "
+                    f"state, or actions. {delivery_note} If this message requested an action, "
+                    "discuss what could be done after a new resident starts.\n\n"
+                    f"Project root: {root}\nPersisted theory:\n{theory}\n\n"
+                    f"Recent conversation:\n{json.dumps(history)}\n\n"
+                    f"Operator: {line}"
+                ),
+            }
+        ]
+        print("Samantha is working…", flush=True)
+        try:
+            reply = str(llm.chat(messages))
+        except Exception as exc:
+            print(f"Detached model request failed: {exc}\n")
+        else:
+            print(f"{reply}\n")
+            journal.write("chat", direction="in", text=line, detached=True)
+            journal.write("chat", direction="out", text=reply, detached=True)
+            history.extend(
+                [
+                    {"direction": "in", "text": line},
+                    {"direction": "out", "text": reply},
+                ]
+            )
+            history = history[-40:]
+        line = None
+
+
+def _detached_history(state: Path, limit: int = 40) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in sorted(state.glob("journal-*.jsonl"))[-5:]:
+        try:
+            for raw in path.read_text(errors="replace").splitlines():
+                row = json.loads(raw)
+                if row.get("type") == "chat":
+                    rows.append(
+                        {
+                            "direction": row.get("direction"),
+                            "text": row.get("text"),
+                        }
+                    )
+        except (OSError, json.JSONDecodeError):
+            continue
+    return rows[-limit:]
+
+
+def _read_text(path: Path, limit: int) -> str:
+    try:
+        return path.read_text(errors="replace")[:limit]
+    except OSError:
+        return "No persisted project theory is available."
 
 
 def _configure_history() -> None:

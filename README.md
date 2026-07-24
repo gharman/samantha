@@ -117,6 +117,11 @@ persists the last 1,000 prompts in `~/.samantha/cli-history` with mode 0600.
 It prints `Samantha is working…` immediately after sending a request because act
 mode may require several sequential model-assisted inspection rounds; cold-start
 analysis runs on a separate background thread and does not gate attached chat.
+If the resident process exits, the CLI handles the closed socket without a
+traceback and reports whether the last message was unsent or its outcome is
+unknown. It then offers detached chat using the persisted project theory, recent
+conversation, and the project's model credentials. Detached chat cannot inspect
+or change live runtime state and says so explicitly.
 Chat is a normal plain-text model conversation even while deeper source analysis
 is incomplete; structured JSON is reserved for internal cognition actions.
 
