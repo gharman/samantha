@@ -97,6 +97,9 @@ def parser() -> argparse.ArgumentParser:
         "--warn-at", type=int, default=-1, help="emit a WARNING line at this step"
     )
     result.add_argument(
+        "--error-at", type=int, default=-1, help="emit an ERROR line at this step"
+    )
+    result.add_argument(
         "--log", action="store_true", help="also route metrics through logging"
     )
     result.add_argument(
@@ -127,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
             train_step(step, scores)
             if step == args.warn_at:
                 emit(f"WARNING novel queue fault at step={step}")
+            if step == args.error_at:
+                emit(f"ERROR worker crashed at step={step}")
             if args.log:
                 log.info("heartbeat step=%s", step)
             step += 1

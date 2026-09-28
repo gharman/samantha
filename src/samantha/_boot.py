@@ -9,6 +9,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .identity import discover_project
 from .state import Journal, save_json, state_root
@@ -300,9 +301,21 @@ def _inspect(current: Resident, text: str) -> None:
             source="sentinel",
             payload={"sentinel": event.sentinel, "evidence": event.evidence},
         )
+        if _is_failure(event) and (actuator := getattr(current, "actuator", None)):
+            actuator.runtime.on_failure(f"{event.sentinel}: {event.evidence}")
         if cognition := getattr(current, "cognition", None):
             # Sentinels run inside host print/logging calls; the model call must not.
             cognition.submit(event)
+
+
+def _is_failure(event: Any) -> bool:
+    """Sentinel events that end an until_failure intervention."""
+    if event.sentinel == "nan-inf":
+        return True
+    line = (
+        str(event.evidence.get("line", "")) if event.sentinel == "log-novelty" else ""
+    )
+    return bool(re.search(r"\b(ERROR|CRITICAL|Traceback|Exception)\b", line))
 
 
 def resident() -> Resident | None:

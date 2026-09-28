@@ -10,6 +10,7 @@ import logging
 import queue
 import sys
 import threading
+import time
 import types
 import uuid
 from dataclasses import dataclass, field
@@ -47,15 +48,22 @@ class InterventionGroup:
     undo: list[tuple[LiveNode, Any]] = field(default_factory=list)
     rewrites: list[str] = field(default_factory=list)
     status: str = "active"
+    expires_at: float | None = None
 
     def summary(self) -> dict[str, Any]:
-        return {
+        summary = {
             "id": self.id,
             "intent": self.intent,
             "lifetime": self.lifetime,
             "status": self.status,
             "changes": [f"{r.op} {r.path}" for r in self.results if r.ok],
         }
+        if self.expires_at is not None:
+            summary["expires_in_s"] = max(0, round(self.expires_at - time.time()))
+        return summary
+
+
+DEFAULT_TEMPORARY_S = 120.0
 
 
 class RuntimeOperator:
@@ -102,6 +110,8 @@ class RuntimeOperator:
             group.results.append(result)
         if not any(result.ok for result in group.results):
             group.status = "failed"
+        elif lifetime == "temporary" and (group.undo or group.rewrites):
+            self._expire_later(group, operations)
         self.resident.journal.write(
             "intervention",
             id=group.id,
@@ -120,6 +130,43 @@ class RuntimeOperator:
             for group in self.groups.values()
             if group.status == "active" and (group.undo or group.rewrites)
         ]
+
+    def _expire_later(
+        self, group: InterventionGroup, operations: list[dict[str, Any]]
+    ) -> None:
+        durations = [
+            float(op["duration_s"])
+            for op in operations
+            if isinstance(op.get("duration_s"), (int, float)) and op["duration_s"] > 0
+        ]
+        duration = max(durations, default=DEFAULT_TEMPORARY_S)
+        group.expires_at = time.time() + duration
+        timer = threading.Timer(
+            duration,
+            self._auto_revert,
+            (group.id, f"temporary ({duration:g}s) elapsed"),
+        )
+        timer.daemon = True
+        timer.start()
+
+    def on_failure(self, reason: str) -> list[str]:
+        """Revert every active until_failure group; returns the reverted ids."""
+        reverted = []
+        for group in list(self.groups.values()):
+            if group.lifetime == "until_failure" and group.status == "active":
+                if self._auto_revert(group.id, f"failure observed: {reason}"):
+                    reverted.append(group.id)
+        return reverted
+
+    def _auto_revert(self, group_id: str, reason: str) -> bool:
+        group = self.groups.get(group_id)
+        if not group or group.status != "active":
+            return False
+        ok = self.revert(group_id, reason)
+        logging.getLogger("samantha").info(
+            "reverted intervention %s (%s): %s", group_id, group.intent, reason
+        )
+        return ok
 
     def revert(self, group_id: str, reason: str = "operator request") -> bool:
         group = self.groups.get(group_id)
@@ -331,7 +378,12 @@ class RuntimeOperator:
                 for target in (node, *aliases):
                     target.write(original)
                 restored = True
-            result = original(*bound.args, **bound.kwargs)
+            try:
+                result = original(*bound.args, **bound.kwargs)
+            except Exception as exc:
+                if lifetime == "until_failure":
+                    self._auto_revert(group.id, f"{node.path} raised {exc!r}")
+                raise
             if matches and isinstance(metadata, dict):
                 result = _transform_result(result, metadata)
             receipt = metadata.get("receipt") if isinstance(metadata, dict) else None

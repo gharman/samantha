@@ -233,6 +233,7 @@ def _action_plan_format() -> dict[str, Any]:
                     "contextual",
                 ],
             },
+            "duration_s": {"type": ["number", "null"]},
             "reason": {"type": "string"},
         },
         "required": [
@@ -244,6 +245,7 @@ def _action_plan_format() -> dict[str, Any]:
             "args_json",
             "kwargs_json",
             "lifetime",
+            "duration_s",
             "reason",
         ],
         "additionalProperties": False,

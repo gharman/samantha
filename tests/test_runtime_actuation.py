@@ -980,3 +980,76 @@ def test_act_planning_rounds_are_capped(tmp_path: Path, monkeypatch: object) -> 
     reply = ActController(current, llm).handle("watch the count")
     assert llm.calls == 3
     assert "limit (3)" in reply
+
+
+def test_temporary_interventions_expire(tmp_path: Path, monkeypatch: object) -> None:
+    import time
+
+    module = runtime_module(tmp_path, monkeypatch)
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "try evolution briefly",
+        [
+            {
+                "op": "set",
+                "path": 'module:runtime_demo::config/"topic"',
+                "value": "evolution",
+                "duration_s": 0.2,
+            }
+        ],
+        "temporary",
+    )
+    assert module.config["topic"] == "evolution"
+    assert group.summary()["expires_in_s"] >= 0
+    deadline = time.monotonic() + 3
+    while group.status == "active" and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert group.status == "reverted"
+    assert module.config["topic"] == "general"
+
+
+def test_until_failure_reverts_on_failure_signals(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    from samantha._boot import _inspect
+    from samantha.observe.metrics import MetricStore
+    from samantha.sentinels import Sentinels
+
+    module = runtime_module(tmp_path, monkeypatch)
+    current = resident(tmp_path)
+    current.sentinels = Sentinels(MetricStore())
+    current.actuator = SimpleNamespace(runtime=RuntimeOperator(current))
+    operator = current.actuator.runtime
+    change = [
+        {"op": "set", "path": 'module:runtime_demo::config/"topic"', "value": "x"}
+    ]
+    operator.execute("risky change", change, "until_failure")
+    _inspect(current, "WARNING queue is slow")  # novel, but not a failure
+    assert module.config["topic"] == "x"
+    _inspect(current, "ERROR queue worker crashed")
+    assert module.config["topic"] == "general"
+
+    def explode(topic: str = "default") -> str:
+        raise RuntimeError("boom")
+
+    explode.__module__ = module.__name__
+    module.explode = explode
+    group = operator.execute(
+        "retry harder until it breaks",
+        [
+            *change,
+            {
+                "op": "intercept",
+                "path": "module:runtime_demo::explode",
+                "kwargs": {"topic": "x"},
+                "lifetime": "until_failure",
+            },
+        ],
+        "until_failure",
+    )
+    try:
+        module.explode()
+    except RuntimeError:
+        pass
+    assert group.status == "reverted"
+    assert module.explode is explode and module.config["topic"] == "general"
