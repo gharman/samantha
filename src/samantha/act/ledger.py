@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from samantha.state import load_json, save_json
 
-DEFAULT_PROTECT = (r"(?i)(eval|seed|test|ckpt|checkpoint)",)
+DEFAULT_PROTECT = (r'(?i)(?:^|[_./:"])(eval|seed|tests?|ckpt|checkpoint)(?:$|[_./:"])',)
 
 
 class Ledger:
