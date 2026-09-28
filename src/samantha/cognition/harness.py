@@ -14,6 +14,18 @@ from .charter import CHARTER
 from samantha.state import load_json
 
 
+def operator_intent(resident: Any) -> dict[str, Any]:
+    """The operator's current and standing goals, included in every model context."""
+    try:
+        lines = (resident.state / "goals.md").read_text(errors="replace").splitlines()
+    except OSError:
+        lines = []
+    return {
+        "current_goal": getattr(resident.config, "goal", None),
+        "standing_goals": [line.strip() for line in lines if line.strip()][-20:],
+    }
+
+
 class Cognition:
     def __init__(self, resident: Any, llm: Any) -> None:
         self.resident, self.llm = resident, llm
@@ -228,7 +240,12 @@ Analyzed {len(inventory.get("files", {}))} project files.
                 self.warned = True
             return None
         prompt = json.dumps(
-            {"event": event.sentinel, "evidence": event.evidence, "mode": cfg.mode}
+            {
+                "event": event.sentinel,
+                "evidence": event.evidence,
+                "mode": cfg.mode,
+                "operator_intent": operator_intent(self.resident),
+            }
         )
         try:
             response = self.llm.complete(
@@ -293,6 +310,7 @@ Analyzed {len(inventory.get("files", {}))} project files.
         )
         context = {
             "operator_question": text,
+            "operator_intent": operator_intent(self.resident),
             "mode": self.resident.config.mode,
             "project_context": model_context,
             "recent_evidence": self._recent_journal(),

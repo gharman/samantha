@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any
 
+from samantha.cognition.harness import operator_intent
 from samantha.state import load_json
 
 from .runtime import InterventionGroup, RuntimeOperator
@@ -73,6 +74,7 @@ class ActController:
         return {
             "mode": "act",
             "operator_request": operator_text,
+            "operator_intent": operator_intent(self.resident),
             "authority": (
                 "The current operator message authorizes relevant runtime actions. "
                 "Use Python's full live introspection surface: reachable application objects, "

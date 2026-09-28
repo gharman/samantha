@@ -104,8 +104,16 @@ class ChatServer:
 
     def _handle(self, message: dict[str, Any]) -> dict[str, Any]:
         text = str(message.get("text", ""))
-        if text.startswith("goal "):
-            goal = text[5:]
+        # An explicit command, so questions like "goal of this app?" reach the model.
+        if text == "/goal" or text.startswith("/goal "):
+            goal = text[len("/goal") :].strip()
+            if not goal:
+                current = self.resident.config.goal or "not set"
+                return {
+                    "ok": True,
+                    "mode": self.resident.config.mode,
+                    "reply": f"Current goal: {current}",
+                }
             self.resident.config.goal = goal
             if message.get("persist"):
                 with (self.resident.state / "goals.md").open("a") as stream:
@@ -113,7 +121,7 @@ class ChatServer:
             return {
                 "ok": True,
                 "mode": self.resident.config.mode,
-                "reply": "Goal updated.",
+                "reply": f"Goal updated: {goal}",
             }
         if text and (cognition := getattr(self.resident, "cognition", None)):
             return {
