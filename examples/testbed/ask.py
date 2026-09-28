@@ -49,7 +49,10 @@ def main() -> int:
                 print(f"> {text}\n(connection closed without a reply)")
                 return 1
             reply = json.loads(raw)
-            print(f"> {text}\n{reply.get('reply') or reply.get('error')}")
+            print(f"> {text}")
+            for notice in reply.get("notices") or []:
+                print(f"⚑ {notice}")
+            print(reply.get("reply") or reply.get("error"))
     return 0
 
 
