@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import logging
 import sys
 import time
@@ -37,7 +36,14 @@ class LogTap:
         logging.getLogger().removeHandler(self.handler)
 
 
-class Tee(io.TextIOBase):
+class Tee:
+    """Observe writes while presenting the wrapped stream's full interface.
+
+    Deliberately not an ``io.TextIOBase`` subclass: its ``isatty``, ``fileno``,
+    ``encoding``, and ``writable`` defaults would shadow ``__getattr__`` and make
+    terminal-aware libraries (rich, tqdm, click) treat the console as a pipe.
+    """
+
     def __init__(
         self,
         wrapped: Any,
@@ -79,6 +85,10 @@ class Tee(io.TextIOBase):
             for rule in expired:
                 self.rewrites.remove(rule)
         return data
+
+    def writelines(self, lines: Any) -> None:
+        for line in lines:
+            self.write(line)
 
     def flush(self) -> None:
         self.wrapped.flush()
