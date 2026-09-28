@@ -136,3 +136,9 @@ class StreamTap:
         with self._rewrite_lock:
             self.rewrites.append(rule)
         return dict(rule)
+
+    def remove_rewrite(self, rule_id: str) -> bool:
+        with self._rewrite_lock:
+            before = len(self.rewrites)
+            self.rewrites[:] = [rule for rule in self.rewrites if rule["id"] != rule_id]
+            return len(self.rewrites) < before

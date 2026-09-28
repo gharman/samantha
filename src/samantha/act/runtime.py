@@ -42,7 +42,17 @@ class InterventionGroup:
     lifetime: str
     results: list[OperationResult] = field(default_factory=list)
     undo: list[tuple[LiveNode, Any]] = field(default_factory=list)
+    rewrites: list[str] = field(default_factory=list)
     status: str = "active"
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "intent": self.intent,
+            "lifetime": self.lifetime,
+            "status": self.status,
+            "changes": [f"{r.op} {r.path}" for r in self.results if r.ok],
+        }
 
 
 class RuntimeOperator:
@@ -85,6 +95,14 @@ class RuntimeOperator:
         )
         return group
 
+    def revertible(self) -> list[InterventionGroup]:
+        """Groups whose changes are still installed, oldest first."""
+        return [
+            group
+            for group in self.groups.values()
+            if group.status == "active" and (group.undo or group.rewrites)
+        ]
+
     def revert(self, group_id: str, reason: str = "operator request") -> bool:
         group = self.groups.get(group_id)
         if not group or group.status == "reverted":
@@ -96,6 +114,10 @@ class RuntimeOperator:
                 ok = ok and (node.read() is old or node.read() == old)
             except Exception:
                 ok = False
+        observer = getattr(self.resident, "observer", None)
+        for rule_id in group.rewrites:
+            if observer and hasattr(observer, "remove_output_rewrite"):
+                observer.remove_output_rewrite(rule_id)
         group.status = "reverted" if ok else "revert_failed"
         self.resident.journal.write(
             "revert", intervention_id=group.id, reason=reason, verified=ok
@@ -111,6 +133,8 @@ class RuntimeOperator:
             return OperationResult(op, path, False, str(error))
         if op in {"search", "inspect"}:
             return self._read_operation(op, path, operation)
+        if op == "revert":
+            return self._revert_operation(group, path)
         if op == "emit":
             message = str(operation.get("value") or "")
             logging.getLogger("samantha").info("operator receipt: %s", message)
@@ -141,6 +165,22 @@ class RuntimeOperator:
             return OperationResult(op, path, False, f"{type(exc).__name__}: {exc}")
         finally:
             lock.release()
+
+    def _revert_operation(
+        self, group: InterventionGroup, target: str
+    ) -> OperationResult:
+        candidates = [item for item in self.revertible() if item is not group]
+        if target in {"", "last"}:
+            chosen = candidates[-1] if candidates else None
+        else:
+            chosen = next((item for item in candidates if item.id == target), None)
+        if chosen is None:
+            return OperationResult(
+                "revert", target, False, "no active intervention matches"
+            )
+        ok = self.revert(chosen.id)
+        detail = f"reverted {chosen.id} ({chosen.intent})" if ok else "revert failed"
+        return OperationResult("revert", chosen.id, ok, detail, ok)
 
     def _read_operation(
         self, op: str, path: str, operation: dict[str, Any]
@@ -282,8 +322,9 @@ class RuntimeOperator:
         wrapper.__name__ = getattr(original, "__name__", "samantha_interceptor")
         wrapper.__wrapped__ = original
         node.write(wrapper)
-        if lifetime != "one_shot":
-            group.undo.append((node, original))
+        # Even one-shot interceptors are revertible until they fire; restoring the
+        # original afterwards is a no-op.
+        group.undo.append((node, original))
         verified = node.read() is wrapper
         return OperationResult(
             "intercept",
@@ -310,6 +351,7 @@ class RuntimeOperator:
             value.get("source"),
             lifetime,
         )
+        group.rewrites.append(rule["id"])
         return OperationResult(
             "rewrite_output",
             "stdio",

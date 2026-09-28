@@ -62,3 +62,6 @@ class Observer:
         lifetime: str = "process",
     ) -> dict[str, Any]:
         return self.streamtap.add_rewrite(match, replace, source, lifetime)
+
+    def remove_output_rewrite(self, rule_id: str) -> bool:
+        return self.streamtap.remove_rewrite(rule_id)

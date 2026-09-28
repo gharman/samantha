@@ -728,3 +728,92 @@ def test_natural_language_queries_rank_relevant_live_paths_first(
     )
     found = [item["path"] for item in group.results[0].value]
     assert found and all("sampling_weights" in path for path in found)
+
+
+def plan(*operations: dict[str, object]) -> dict[str, object]:
+    return {
+        "intent": "act",
+        "reply": "",
+        "done": True,
+        "lifetime": "process",
+        "operations": [
+            {
+                "effect": "write",
+                "path": None,
+                "query": None,
+                "value_json": None,
+                "args_json": None,
+                "kwargs_json": None,
+                "lifetime": "process",
+                "reason": "operator asked",
+                **operation,
+            }
+            for operation in operations
+        ],
+    }
+
+
+def test_operator_can_undo_the_last_intervention_through_chat(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+
+    class UndoLLM:
+        def __init__(self) -> None:
+            self.contexts: list[dict[str, object]] = []
+
+        def plan_action(self, messages: list[dict[str, str]]) -> dict[str, object]:
+            context = json.loads(messages[0]["content"])
+            self.contexts.append(context)
+            if context["operator_request"] == "make the topic evolution":
+                return plan(
+                    {
+                        "op": "set",
+                        "path": 'module:runtime_demo::config/"topic"',
+                        "value_json": '"evolution"',
+                    }
+                )
+            return plan({"op": "revert", "path": "last"})
+
+    llm = UndoLLM()
+    controller = ActController(resident(tmp_path), llm)
+    controller.handle("make the topic evolution")
+    assert module.config["topic"] == "evolution"
+    reply = controller.handle("undo that")
+    assert module.config["topic"] == "general"
+    active = llm.contexts[-1]["active_interventions"]
+    assert [change for group in active for change in group["changes"]] == [
+        'set module:runtime_demo::config/"topic"'
+    ]
+    assert "reverted" in reply
+    assert controller.runtime.revertible() == []
+
+
+def test_revert_removes_unfired_one_shot_interceptors_and_output_rules(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    from samantha.observe import Observer
+
+    module = runtime_module(tmp_path, monkeypatch)
+    current = resident(tmp_path)
+    current.observer = Observer(current.journal)
+    operator = RuntimeOperator(current)
+    original = module.generate
+    group = operator.execute(
+        "change the next topic and label it",
+        [
+            {
+                "op": "intercept",
+                "path": "module:runtime_demo::generate",
+                "kwargs": {"topic": "puppies"},
+                "lifetime": "one_shot",
+            },
+            {"op": "rewrite_output", "value": {"match": "Topic", "replace": "Theme"}},
+        ],
+        "one_shot",
+    )
+    assert module.generate is not original
+    assert current.observer.streamtap.rewrites
+    assert operator.revert(group.id)
+    assert module.generate is original
+    assert current.observer.streamtap.rewrites == []
