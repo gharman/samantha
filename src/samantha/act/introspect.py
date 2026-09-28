@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import gc
+import re
 import sys
 import types
 from dataclasses import dataclass
@@ -61,19 +62,22 @@ class RuntimeGraph:
         return self
 
     def snapshot(
-        self, query: str | None = None, limit: int = 500
+        self, query: str | None = None, limit: int = 500, only_matches: bool = False
     ) -> list[dict[str, Any]]:
-        words = (query or "").lower().split()
-        result = []
-        for node in self.nodes.values():
-            item = self.describe(node)
-            haystack = f"{item['path']} {item['type']} {item['preview']}".lower()
-            if words and not all(word in haystack for word in words):
-                continue
-            result.append(item)
-            if len(result) >= limit:
-                break
-        return result
+        """Describe live nodes, most relevant to ``query`` first.
+
+        Requiring every query word to match made a natural-language request match
+        nothing, so nodes are ranked by how many distinct query words they contain.
+        """
+        items = [self.describe(node) for node in self.nodes.values()]
+        words = _query_words(query)
+        if not words:
+            return [] if only_matches else items[:limit]
+        scored = [(_relevance(item, words), index) for index, item in enumerate(items)]
+        if only_matches:
+            scored = [row for row in scored if row[0] > 0]
+        scored.sort(key=lambda row: (-row[0], row[1]))
+        return [items[index] for _, index in scored[:limit]]
 
     def describe(self, node: LiveNode | str) -> dict[str, Any]:
         current = self.nodes[node] if isinstance(node, str) else node
@@ -262,6 +266,24 @@ def _public_methods(cls: type, is_project: Any) -> list[str]:
             ):
                 names.setdefault(name)
     return list(names)[:50]
+
+
+_STOPWORDS = {
+    "a", "an", "and", "are", "be", "can", "change", "could", "do", "for", "how",
+    "in", "is", "it", "make", "me", "my", "of", "on", "or", "please", "set", "so",
+    "that", "the", "this", "to", "what", "when", "with", "you",
+}  # fmt: skip
+
+
+def _query_words(query: str | None) -> set[str]:
+    words = re.findall(r"[a-z0-9_]+", (query or "").lower())
+    return {word for word in words if len(word) > 1 and word not in _STOPWORDS}
+
+
+def _relevance(item: dict[str, Any], words: set[str]) -> int:
+    path = item["path"].lower()
+    detail = f"{item['type']} {item['preview']}".lower()
+    return sum(2 if word in path else 1 if word in detail else 0 for word in words)
 
 
 def _safe_vars(value: Any) -> dict[str, Any]:

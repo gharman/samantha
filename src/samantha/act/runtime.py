@@ -147,7 +147,7 @@ class RuntimeOperator:
     ) -> OperationResult:
         if op == "search":
             query = str(operation.get("query") or "")
-            found = self.graph.snapshot(query, limit=100)
+            found = self.graph.snapshot(query, limit=100, only_matches=True)
             return OperationResult(
                 op, path, True, f"found {len(found)} paths", True, found
             )
