@@ -14,6 +14,9 @@ from .identity import discover_project
 from .state import Journal, save_json, state_root
 
 LOG = logging.getLogger("samantha")
+# Each act-planning round is a full model call over the live inventory; an
+# unbounded default let one chat message run up cost and latency indefinitely.
+DEFAULT_ACT_MAX_ROUNDS = 12
 _resident: Resident | None = None
 
 
@@ -30,7 +33,7 @@ class Config:
     flag_budget: int = 0
     dotenv_file: str | None = None
     llm_timeout: float = 0.0
-    act_max_rounds: int = 0
+    act_max_rounds: int = DEFAULT_ACT_MAX_ROUNDS
     log_level: str = "INFO"
     warnings: list[str] = field(default_factory=list)
 
@@ -45,8 +48,10 @@ class Config:
                 return os.environ[key]
             return dotenv_values.get(key, default)
 
-        def number(key: str, cast: type[int] | type[float]) -> int | float:
-            return _env_number(key, cast, warnings, env)
+        def number(
+            key: str, cast: type[int] | type[float], default: int = 0
+        ) -> int | float:
+            return _env_number(key, cast, warnings, env, default)
 
         values = dict(
             mode=env("SAMANTHA", "advise"),
@@ -60,7 +65,9 @@ class Config:
             flag_budget=number("SAMANTHA_FLAG_BUDGET", int),
             dotenv_file=str(dotenv_file) if dotenv_file else None,
             llm_timeout=number("SAMANTHA_LLM_TIMEOUT", float),
-            act_max_rounds=number("SAMANTHA_ACT_MAX_ROUNDS", int),
+            act_max_rounds=number(
+                "SAMANTHA_ACT_MAX_ROUNDS", int, DEFAULT_ACT_MAX_ROUNDS
+            ),
             log_level=(
                 "OFF"
                 if _truthy(env("SAMANTHA_QUIET"))
@@ -79,16 +86,17 @@ def _env_number(
     cast: type[int] | type[float],
     warnings: list[str],
     lookup: Callable[[str], str | None] = os.getenv,
+    default: int = 0,
 ) -> int | float:
-    """Read a numeric setting; a malformed value falls back to 0 (unlimited)."""
+    """Read a numeric setting; unset or malformed values use the default."""
     raw = (lookup(name) or "").strip()
     if not raw:
-        return cast(0)
+        return cast(default)
     try:
         return cast(raw)
     except ValueError:
-        warnings.append(f"ignoring {name}={raw!r}: expected a number; using 0")
-        return cast(0)
+        warnings.append(f"ignoring {name}={raw!r}: expected a number; using {default}")
+        return cast(default)
 
 
 def _dotenv_key_allowed(key: str) -> bool:

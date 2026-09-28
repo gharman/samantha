@@ -56,11 +56,13 @@ Modes are `off`, `observe`, `advise` (default), and `act`. Actuation additionall
 requires an explicit `SAMANTHA=act` in the host process. No API key is needed for
 observe mode or tests.
 
-Samantha's cognition and act-planning loops are unbudgeted by default. Optional
-positive limits can be set with `SAMANTHA_ACT_MAX_ROUNDS`,
+Act planning stops after 12 model rounds per chat message by default, and earlier
+when a round only repeats reads whose results are unchanged. Set
+`SAMANTHA_ACT_MAX_ROUNDS` to change the cap (`0` means unlimited). Sentinel wakes
+are unbudgeted by default; optional positive limits can be set with
 `SAMANTHA_MAX_WAKES_PER_HOUR`, `SAMANTHA_TOKEN_BUDGET_PER_DAY`, and
-`SAMANTHA_FLAG_BUDGET`; zero means unlimited for each setting. A value that is
-not a number is ignored with a warning and treated as zero.
+`SAMANTHA_FLAG_BUDGET`, where zero means unlimited. A value that is not a number
+is ignored with a warning and the default is used.
 
 If Samantha cannot start, the host keeps running and a single
 `[samantha] disabled: <error>` line goes to stderr (suppressed by
