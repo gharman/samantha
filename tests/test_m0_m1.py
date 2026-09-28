@@ -199,3 +199,19 @@ def test_dotenv_numeric_settings_are_parsed_leniently(
     assert config.warnings == [
         "ignoring SAMANTHA_ACT_MAX_ROUNDS='five': expected a number; using 0"
     ]
+
+
+def test_observer_retains_bounded_output(tmp_path: Path) -> None:
+    import tracemalloc
+
+    from samantha.observe import Observer
+
+    observer = Observer(Journal(tmp_path, "run"))
+    tracemalloc.start()
+    before, _ = tracemalloc.get_traced_memory()
+    for index in range(5_000):
+        observer.observe("stdout", f"{index:06d}" + "-" * 1_000)
+    after, _ = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert len(observer.recent) == 200
+    assert after - before < 2_000_000  # an unbounded buffer retains ~5 MB here
