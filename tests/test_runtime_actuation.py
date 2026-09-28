@@ -613,3 +613,41 @@ def test_shared_objects_resolve_through_every_path(
     finally:
         module.state["stop"] = True
         thread.join(1)
+
+
+def test_methods_of_live_objects_are_callable_and_interceptable(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+
+    class Client:
+        def __init__(self) -> None:
+            self.jobs = 3
+
+        def status(self, verbose: bool = False) -> str:
+            return f"healthy: {self.jobs} jobs" + (" (verbose)" if verbose else "")
+
+    Client.__module__ = module.__name__
+    module.Client = Client
+    module.client = Client()
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "check status", [{"op": "call", "path": "module:runtime_demo::client/status"}]
+    )
+    assert group.results[0].ok, group.results[0].detail
+    assert group.results[0].value == "healthy: 3 jobs"
+    described = operator.graph.describe("module:runtime_demo::client/status")
+    assert described["callable"] and not described["mutable"]
+    group = operator.execute(
+        "always be verbose",
+        [
+            {
+                "op": "intercept",
+                "path": "module:runtime_demo::Client/status",
+                "kwargs": {"verbose": True},
+                "lifetime": "process",
+            }
+        ],
+    )
+    assert group.results[0].ok, group.results[0].detail
+    assert module.client.status() == "healthy: 3 jobs (verbose)"
