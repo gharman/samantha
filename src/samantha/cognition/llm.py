@@ -18,9 +18,9 @@ class FakeLLM:
         self.calls += 1
         if isinstance(self.scripts, list):
             return self.scripts[min(self.calls - 1, len(self.scripts) - 1)]
+        fallback = self.scripts.get("default", {"assessment": "healthy", "actions": []})
         return self.scripts.get(
-            signature,
-            self.scripts.get("default", {"assessment": "healthy", "actions": []}),
+            signature, self.scripts.get(signature.removeprefix("wake:"), fallback)
         )
 
     def chat(self, messages: list[dict[str, str]]) -> str:
@@ -47,6 +47,8 @@ class OpenAILLM:
         }
         if signature == "cold_start":
             body["text"] = {"format": _cold_start_format()}
+        elif signature.startswith("wake:"):
+            body["text"] = {"format": _wake_format()}
         response = httpx.post(
             f"{self.base_url}/v1/responses",
             timeout=self.timeout or None,
@@ -163,6 +165,34 @@ def _cold_start_format() -> dict[str, Any]:
             "type": "object",
             "properties": properties,
             "required": ["summary", *fields],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _wake_format() -> dict[str, Any]:
+    action = {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["flag", "question", "proposal"]},
+            "summary": {"type": "string"},
+            "evidence": {"type": "string"},
+            "prediction": {"type": "string"},
+        },
+        "required": ["type", "summary", "evidence", "prediction"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "json_schema",
+        "name": "samantha_wake",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "assessment": {"type": "string"},
+                "actions": {"type": "array", "items": action, "maxItems": 3},
+            },
+            "required": ["assessment", "actions"],
             "additionalProperties": False,
         },
     }
