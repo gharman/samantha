@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import queue
 from collections import deque
 from typing import Any
 
@@ -15,7 +14,6 @@ class Observer:
     def __init__(self, journal: Any) -> None:
         self.journal = journal
         self.metrics = MetricStore()
-        self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self.recent: deque[dict[str, Any]] = deque(maxlen=200)
         self.logtap = LogTap(self.observe)
         self.streamtap = StreamTap(self.observe)
@@ -36,7 +34,6 @@ class Observer:
         try:
             found = self.metrics.ingest(text)
             event = {"source": source, "text": text[:2_000], "metrics": found}
-            self.events.put_nowait(event)
             self.recent.append(event)
             if found:
                 self.journal.write(
