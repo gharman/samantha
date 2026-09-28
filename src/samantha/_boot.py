@@ -158,9 +158,7 @@ def _logging(config: Config) -> None:
     LOG.propagate = False
 
 
-def arm(
-    entry: str | Path | None = None, *, force: bool = False, **overrides: object
-) -> Resident | None:
+def arm(entry: str | Path | None = None, **overrides: object) -> Resident | None:
     global _resident
     root, key = discover_project(entry)
     config = Config.resolve(_dotenv_start=root, **overrides)
@@ -174,23 +172,10 @@ def arm(
     state = state_root(key, config.state_dir)
     journal = Journal(state)
     _resident = Resident(config, root, key, journal, state)
-    from .claims import ClaimStore
-    from .baselines import Baselines
-
-    _resident.claims = ClaimStore(state / "claims.json")
-    demoted = _resident.claims.validate()
-    _resident.baselines = Baselines(state / "baselines.json")
     from .act.ledger import Ledger
 
     _resident.ledger = Ledger(state / "ledger.json")
-    for claim in demoted:
-        journal.write(
-            "demotion",
-            knob=claim,
-            **{"from": "fact", "to": "hypothesis"},
-            cause="fingerprint changed",
-        )
-    if not config.api_key and config.mode in {"advise", "act"} and not force:
+    if not config.api_key and config.mode in {"advise", "act"}:
         LOG.info("no API key; cognition dormant")
     LOG.info(
         "resident armed · mode=%s · pid=%s · project=%s",

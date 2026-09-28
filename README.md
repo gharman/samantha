@@ -70,8 +70,16 @@ Worker processes started by `multiprocessing` (spawn or forkserver, including
 PyTorch DataLoader workers) re-import the host's `__main__` but do not arm their
 own resident. Set `SAMANTHA_ARM_CHILDREN=1` to arm one in each worker anyway.
 
-In act mode, application-specific handlers and `expose()` declarations are not
-required. Samantha indexes live project modules, active project frames, globals,
+In act mode, application-specific handlers are not required, but a host can
+declare preferred knobs:
+
+```python
+samantha.expose("learning_rate", obj=cfg, attr="lr", bounds=(1e-5, 0.1))
+samantha.silence(minutes=10)  # pause sentinel findings; chat keeps working
+```
+
+Declared knobs appear to the planner as `exposed:<name>` paths, and values outside
+their bounds are rejected. Beyond them, Samantha indexes live project modules, active project frames, globals,
 mappings, collections, classes, instances, and existing project callables. Its
 audited generic operations can inspect/search paths, assign attributes or items,
 append/enqueue values, invoke reachable project and application-held API callables,

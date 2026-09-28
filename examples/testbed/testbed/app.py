@@ -58,6 +58,7 @@ class Trainer:
 
 
 trainer = Trainer()
+samantha.expose("learning_rate", obj=settings, attr="lr", bounds=(0.001, 0.2))
 log = logging.getLogger("testbed")
 slowest_print = 0.0
 

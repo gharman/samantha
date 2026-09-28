@@ -1,4 +1,4 @@
-"""Persistent per-knob trust ladder."""
+"""Protected paths and the operator's declared knobs."""
 
 from __future__ import annotations
 import re
@@ -21,37 +21,9 @@ class Ledger:
     def register(
         self, knob: str, bounds: tuple[float, float] | None = None
     ) -> dict[str, Any]:
-        state = (
-            "protected" if any(p.search(knob) for p in self.protect) else "candidate"
-        )
-        row = self.data.setdefault(knob, {"state": state, "score": 0, "bounds": bounds})
-        self.save()
-        return row
-
-    def transition(self, knob: str, state: str, cause: str = "") -> tuple[str, str]:
-        old = self.data[knob]["state"]
-        if old in {"protected", "dead"}:
-            return old, old
-        self.data[knob]["state"] = state
-        self.save()
-        return old, state
-
-    def outcome(self, knob: str, kept: bool) -> str:
-        row = self.data[knob]
-        row["score"] += 1 if kept else -2
-        if row["score"] < 0:
-            row["state"] = "suspended"
-        elif row["state"] == "probed" and row["score"] >= 2:
-            row["state"] = "trusted"
-        self.save()
-        return row["state"]
-
-    def authorized(self, knob: str, value: Any) -> bool:
-        row = self.data.get(knob, {})
-        bounds = row.get("bounds")
-        return row.get("state") == "trusted" and (
-            not bounds or bounds[0] <= value <= bounds[1]
-        )
-
-    def save(self) -> None:
+        """Record a knob declared with ``samantha.expose`` and its protection."""
+        protected = any(p.search(knob) for p in self.protect)
+        row = {"state": "protected" if protected else "declared", "bounds": bounds}
+        self.data[knob] = row
         save_json(self.path, self.data)
+        return row

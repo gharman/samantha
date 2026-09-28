@@ -4,9 +4,6 @@ from pathlib import Path
 
 from samantha._boot import Config
 from samantha import _application_entry
-from samantha.identity import fingerprint
-from samantha.observe.census import census
-from samantha.observe.hotread import CountingDict
 from samantha.observe.metrics import MetricStore
 from samantha.observe.source import read_source
 from samantha.state import Journal, redact, state_root
@@ -26,20 +23,6 @@ def test_metrics_and_reference() -> None:
     assert found == [{"series": "fidelity.head_2", "value": 0.71, "reference": 0.92}]
     assert metrics.references["fidelity.head_2"] == 0.92
     assert metrics.ingest("loss=1.25 gpu/util: 72%")[-1]["value"] == 0.72
-
-
-def test_census_and_counting_dict() -> None:
-    assert "cfg" in census({"cfg": {"lr": 0.1}, "unrelated": {}})
-    wrapped = CountingDict({"lr": 0.1}, "lr")
-    assert wrapped["lr"] == 0.1 and wrapped.reads == 1
-
-
-def test_function_fingerprint_stable(tmp_path: Path) -> None:
-    path = tmp_path / "x.py"
-    path.write_text("def f():\n    return 1\n")
-    first = fingerprint(path, "f")
-    path.write_text("# comment\ndef f():\n    return 1\n")
-    assert fingerprint(path, "f") == first
 
 
 def test_dotenv_openai_key_arms_configuration(
