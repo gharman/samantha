@@ -30,10 +30,33 @@ def residents() -> list[tuple[int, Path]]:
     found = []
     for path in runtime_dir().glob("*.sock"):
         try:
-            found.append((int(path.stem), path))
+            pid = int(path.stem)
         except ValueError:
             continue
+        if _alive(pid):
+            found.append((pid, path))
+        else:
+            _remove_stale(path)
     return sorted(found)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _remove_stale(path: Path) -> None:
+    """Remove files left by a resident that exited without orderly shutdown."""
+    for stale in (path, path.with_suffix(".pid")):
+        try:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _select(pid: int | None) -> Path | None:
@@ -49,7 +72,13 @@ def _select(pid: int | None) -> Path | None:
 def connect(path: Path) -> int:
     _configure_history()
     with socket.socket(socket.AF_UNIX) as client:
-        client.connect(str(path))
+        try:
+            client.connect(str(path))
+        except (ConnectionRefusedError, FileNotFoundError):
+            # A reused PID can look alive while nothing listens on the socket.
+            _remove_stale(path)
+            print(f"Samantha in process {path.stem} is no longer running.")
+            return 1
         incoming = client.makefile("rb")
         hello = _message(incoming.readline())
         print(f"Connected to Samantha in process {hello.get('pid', path.stem)}")

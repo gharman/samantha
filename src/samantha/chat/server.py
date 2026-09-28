@@ -26,6 +26,8 @@ class ChatServer:
         if self.runtime.stat().st_mode & 0o077:
             raise PermissionError("unsafe runtime directory permissions")
         self.sock = socket.socket(socket.AF_UNIX)
+        # A crashed earlier process with this reused PID may have left its socket.
+        self.path.unlink(missing_ok=True)
         self.sock.bind(str(self.path))
         os.chmod(self.path, 0o600)
         self.sock.listen()
