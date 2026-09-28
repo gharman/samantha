@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from samantha._boot import Config
@@ -69,6 +70,62 @@ def test_dotenv_can_be_loaded_from_discovered_root(
     assert config.dotenv_file == str(project / ".env")
 
 
+def test_anthropic_key_is_not_used_as_openai_bearer_token(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+    config = Config.resolve()
+    assert config.api_key is None
+
+
+def test_dotenv_does_not_leak_unrelated_keys_into_host_environment(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DEBUG", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY=test-key\nDEBUG=true\nDATABASE_URL=postgres://evil\n"
+    )
+    Config.resolve()
+    assert "DEBUG" not in os.environ
+    assert "DATABASE_URL" not in os.environ
+
+
+def test_dotenv_stops_at_given_root_and_does_not_walk_up_to_parents(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=ancestor-key\n")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config = Config.resolve(_dotenv_start=project)
+    assert config.api_key is None
+    assert config.dotenv_file is None
+
+
+def test_dotenv_strips_unquoted_inline_comment(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-abc123 # prod key\n")
+    config = Config.resolve()
+    assert config.api_key == "sk-abc123"
+
+
+def test_dotenv_keeps_hash_inside_quoted_value(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SAMANTHA_GOAL", raising=False)
+    (tmp_path / ".env").write_text('SAMANTHA_GOAL="ship #23 and #24"\n')
+    config = Config.resolve()
+    assert config.goal == "ship #23 and #24"
+
+
 def test_quiet_environment_disables_resident_console_logging(
     tmp_path: Path, monkeypatch: object
 ) -> None:
@@ -126,3 +183,19 @@ def test_application_entry_ignores_virtual_environment_shims() -> None:
     entry = Path(_application_entry() or "")
     assert entry.name == "test_m0_m1.py"
     assert ".venv" not in entry.parts
+
+
+def test_dotenv_numeric_settings_are_parsed_leniently(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.delenv("SAMANTHA_ACT_MAX_ROUNDS", raising=False)
+    monkeypatch.delenv("SAMANTHA_LLM_TIMEOUT", raising=False)
+    (tmp_path / ".env").write_text(
+        "SAMANTHA_ACT_MAX_ROUNDS=five\nSAMANTHA_LLM_TIMEOUT=45 # seconds\n"
+    )
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.act_max_rounds == 0
+    assert config.llm_timeout == 45.0
+    assert config.warnings == [
+        "ignoring SAMANTHA_ACT_MAX_ROUNDS='five': expected a number; using 0"
+    ]

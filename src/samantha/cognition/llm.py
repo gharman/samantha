@@ -264,6 +264,3 @@ def _output_text(payload: dict[str, Any]) -> str:
     details = payload.get("incomplete_details") or {}
     suffix = f": {details}" if details else ""
     raise RuntimeError(f"OpenAI response contained no text (status={status}){suffix}")
-
-
-AnthropicLLM = OpenAILLM
