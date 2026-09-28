@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any
 from samantha.state import load_json, save_json
 
-DEFAULT_PROTECT = (r'(?i)(?:^|[_./:"])(eval|seed|tests?|ckpt|checkpoint)(?:$|[_./:"])',)
+# Keywords must be whole path segments: "retrieval" is not "eval", but dict keys
+# like "eval-split" or "seed offset" still are.
+DEFAULT_PROTECT = (
+    r'(?i)(?:^|[-_./:"\s])(eval|seed|tests?|ckpt|checkpoint)(?:$|[-_./:"\s])',
+)
 
 
 class Ledger:
