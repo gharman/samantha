@@ -183,15 +183,7 @@ class ActController:
         return []
 
     def _recent_chat(self, limit: int = 30) -> list[dict[str, Any]]:
-        rows = []
-        try:
-            for line in self.resident.journal.path.read_text().splitlines():
-                row = json.loads(line)
-                if row.get("type") == "chat":
-                    rows.append(row)
-        except (OSError, json.JSONDecodeError):
-            pass
-        return rows[-limit:]
+        return self.resident.journal.recent(limit, "chat")
 
     def _project_theory(self) -> str:
         try:

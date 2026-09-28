@@ -215,3 +215,25 @@ def test_observer_retains_bounded_output(tmp_path: Path) -> None:
     tracemalloc.stop()
     assert len(observer.recent) == 200
     assert after - before < 2_000_000  # an unbounded buffer retains ~5 MB here
+
+
+def test_journal_holds_one_handle_and_serves_recent_rows(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    opened = []
+    original_open = Path.open
+
+    def counting_open(self: Path, *args: object, **kwargs: object) -> object:
+        opened.append(self)
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    journal = Journal(tmp_path, "run")
+    journal.write("chat", direction="in", text="what is the loss doing?")
+    for step in range(1_000):
+        journal.write("observation", source="stdout", payload={"step": step})
+    journal.close()
+    assert opened.count(journal.path) == 1
+    assert len(journal.path.read_text().splitlines()) == 1_001
+    assert journal.recent(1)[0]["payload"] == {"step": 999}
+    assert journal.recent(5, "chat")[0]["text"] == "what is the loss doing?"

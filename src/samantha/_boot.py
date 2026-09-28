@@ -140,6 +140,7 @@ class Resident:
             component = getattr(self, name, None)
             if component and hasattr(component, "stop"):
                 component.stop()
+        self.journal.close()
 
 
 def _truthy(value: str | None) -> bool:

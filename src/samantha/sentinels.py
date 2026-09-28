@@ -3,6 +3,7 @@
 from __future__ import annotations
 import math
 import re
+from itertools import islice
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,7 +32,8 @@ class Sentinels:
     def inspect_metrics(self) -> list[WakeEvent]:
         events: list[WakeEvent] = []
         for name, values in self.metrics.series.items():
-            window = list(values)[-25:]
+            # Series hold up to 4,096 points; copy only the tail on every line.
+            window = list(islice(reversed(values), 25))[::-1]
             if any(not math.isfinite(value) for value in window):
                 events.append(
                     WakeEvent("nan-inf", {"series": name, "values": window[-3:]})
