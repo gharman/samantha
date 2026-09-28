@@ -130,6 +130,13 @@ class ActController:
                     "writes through the tapped stream"
                 ),
                 "emit": "write an operator-visible receipt through Samantha's host logger",
+                "lifetimes": (
+                    "one_shot restores after the first matching call; temporary "
+                    "reverts after duration_s seconds (default 120); until_failure "
+                    "reverts automatically on NaN/inf metrics, a new ERROR or "
+                    "Traceback line, or an exception through the interceptor; "
+                    "process and contextual last until reverted"
+                ),
                 "revert": (
                     "undo an active intervention: path is its id from "
                     "active_interventions, or 'last' for the most recent"
