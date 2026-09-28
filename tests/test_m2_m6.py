@@ -3,7 +3,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from samantha.act.ledger import Ledger
-from samantha.claims import ClaimStore
 from samantha.cognition.harness import Cognition
 from samantha.cognition.llm import (
     FakeLLM,
@@ -11,7 +10,6 @@ from samantha.cognition.llm import (
     _cold_start_format,
     _output_text,
 )
-from samantha.report import generate
 from samantha.sentinels import WakeEvent
 from samantha.state import Journal, save_json
 
@@ -198,26 +196,6 @@ def test_chat_can_be_ordinary_conversation(tmp_path: Path) -> None:
     )
 
 
-def test_claim_demotion(tmp_path: Path) -> None:
-    source = tmp_path / "code.py"
-    source.write_text("def train():\n    return 1\n")
-    claims = ClaimStore(tmp_path / "claims.json")
-    claims.record("hot", "live", source, "train")
-    source.write_text("def train():\n    return 2\n")
-    assert claims.validate() == ["hot"]
-
-
-def test_ledger_protection_and_promotion(tmp_path: Path) -> None:
-    ledger = Ledger(tmp_path / "ledger.json")
-    assert ledger.register("eval_seed")["state"] == "protected"
-    assert ledger.register("lr", (0.0, 1.0))["state"] == "candidate"
-    ledger.transition("lr", "probed")
-    ledger.outcome("lr", True)
-    ledger.outcome("lr", True)
-    assert ledger.authorized("lr", 0.5)
-    assert not ledger.authorized("lr", 2.0)
-
-
 def test_ledger_protection_does_not_match_substrings(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "ledger.json")
     for knob in (
@@ -228,7 +206,7 @@ def test_ledger_protection_does_not_match_substrings(tmp_path: Path) -> None:
         "contest",
         "attestation",
     ):
-        assert ledger.register(knob)["state"] == "candidate", knob
+        assert ledger.register(knob)["state"] == "declared", knob
     for knob in (
         "eval",
         "seed",
@@ -241,14 +219,6 @@ def test_ledger_protection_does_not_match_substrings(tmp_path: Path) -> None:
         'config/"seed offset"',
     ):
         assert ledger.register(knob)["state"] == "protected", knob
-
-
-def test_three_run_report(tmp_path: Path) -> None:
-    for index in range(3):
-        journal = Journal(tmp_path, f"run-{index}")
-        journal.write("intervention", id=f"i{index}", knob="cfg.weight", old=1, new=2)
-    report = generate(tmp_path)
-    assert "cfg.weight" in report and "Proposed permanent source change" in report
 
 
 def test_sentinel_wakes_never_block_the_observed_thread(tmp_path: Path) -> None:
@@ -350,3 +320,16 @@ def test_wake_findings_use_a_schema_and_reach_the_operator(tmp_path: Path) -> No
     reply = server._handle({"type": "command", "text": "anything wrong?"})
     assert reply["notices"] == ["flag: gpu/util is pinned at 72%"]
     assert server._handle({"type": "command", "text": "and now?"})["notices"] == []
+
+
+def test_silence_pauses_sentinel_wakes(tmp_path: Path) -> None:
+    import time
+
+    resident = fake_resident(tmp_path)
+    llm = FakeLLM({"stall": {"assessment": "x", "actions": []}})
+    cognition = Cognition(resident, llm)
+    resident.quiet_until = time.time() + 60
+    assert cognition.wake(WakeEvent("stall", {"series": "loss"})) is None
+    assert llm.calls == 0
+    resident.quiet_until = 0
+    assert cognition.wake(WakeEvent("stall", {"series": "loss"})) is not None

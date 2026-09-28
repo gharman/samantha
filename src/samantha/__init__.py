@@ -32,9 +32,9 @@ def expose(
     attr: str | None = None,
     setter: Callable[[Any], None] | None = None,
     kind: str = "value",
-    logged: bool = True,
     bounds: tuple[float, float] | None = None,
 ) -> None:
+    """Declare a knob act mode may prefer, with optional numeric bounds."""
     if setter is not None:
 
         def get() -> None:
@@ -67,6 +67,7 @@ def event(text: str) -> None:
 
 
 def silence(minutes: int = 30) -> None:
+    """Pause sentinel wakes and their findings; chat keeps working."""
     if current := resident():
         current.quiet_until = __import__("time").time() + minutes * 60
 

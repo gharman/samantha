@@ -73,6 +73,21 @@ class RuntimeOperator:
         self.graph.refresh()
         return self.graph.snapshot(query, limit)
 
+    def declared_knobs(self) -> list[dict[str, Any]]:
+        """Knobs the host declared with ``samantha.expose``, from the last refresh."""
+        knobs = []
+        for path, node in list(self.graph.nodes.items()):
+            if node.access != "exposure":
+                continue
+            item = self.graph.describe(node)
+            item.update(
+                bounds=node.parent.bounds,
+                kind=node.parent.kind,
+                protected=bool(self._protected(path)),
+            )
+            knobs.append(item)
+        return knobs
+
     def execute(
         self,
         intent: str,

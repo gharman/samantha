@@ -238,6 +238,8 @@ Analyzed {len(inventory.get("files", {}))} project files.
     def wake(self, event: Any) -> dict[str, Any] | None:
         if self.provider_ready is False:
             return None
+        if time.time() < getattr(self.resident, "quiet_until", 0):
+            return None  # samantha.silence()
         now = time.time()
         while self.wakes and self.wakes[0] < now - 3600:
             self.wakes.popleft()

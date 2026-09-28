@@ -70,3 +70,14 @@ Mutations are grouped by operator intent rather than restricted to one lever. Ea
 ## Conditional interception and result-bearing chat correction
 
 Generic interceptors now accept declarative metadata rather than model-authored code: a named-argument equality condition, argument overrides, string result replacements, mapping result updates, and an optional receipt. One-shot restoration occurs after the first matching invocation rather than the first unrelated call. After any mutating or callable operation, the controller performs a second conversational synthesis over verified tool results and newly captured host output; return values are also rendered in the factual receipt. Every act-planning round receives recent bidirectional chat events, preserving the active subject for elliptical follow-ups such as “ok, and?”.
+
+## Orphan removal and declared knobs
+
+Modules left behind by the import-first and introspection-first corrections were
+removed rather than kept as unreachable code: the one-lever intervention manager and
+reversibility probe, the recurrence report, the in-process runner, the census and
+hot-read helpers, the read-only tool facade, fingerprint-bound claims, and learned
+baselines, along with the ledger's trust ladder and the unused metric helpers. The
+ledger now records only protected paths and declared knobs. `samantha.expose()`
+declarations are offered to the act planner as bounds-checked `exposed:` paths, and
+`samantha.silence()` pauses sentinel wakes.

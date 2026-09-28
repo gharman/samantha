@@ -892,3 +892,29 @@ def test_interceptors_reach_callers_that_imported_the_function(
     assert caller.generate("anything") == "puppies"
     assert caller.generate is original and module.generate is original
     assert stale("anything") == "anything"
+
+
+def test_declared_knobs_are_offered_and_bounds_checked(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    import samantha
+
+    module = runtime_module(tmp_path, monkeypatch)
+    monkeypatch.setattr(samantha, "_exposures", {})
+    samantha.expose("topic_count", obj=module, attr="retries", bounds=(0, 5))
+    module.retries = 1
+    operator = RuntimeOperator(resident(tmp_path))
+    operator.inventory()
+    knobs = operator.declared_knobs()
+    assert [(k["path"], k["bounds"]) for k in knobs] == [
+        ("exposed:topic_count", (0, 5))
+    ]
+    ok = operator.execute(
+        "more retries", [{"op": "set", "path": "exposed:topic_count", "value": 3}]
+    )
+    assert ok.results[0].ok and module.retries == 3
+    bad = operator.execute(
+        "way more", [{"op": "set", "path": "exposed:topic_count", "value": 50}]
+    )
+    assert not bad.results[0].ok and "outside declared bounds" in bad.results[0].detail
+    assert module.retries == 3

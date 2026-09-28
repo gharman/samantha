@@ -23,6 +23,8 @@ class LiveNode:
     mutable: bool = False
 
     def read(self) -> Any:
+        if self.access == "exposure":
+            return self.parent.get()
         if self.access == "attr":
             return getattr(self.parent, self.key)
         if self.access == "item":
@@ -32,7 +34,12 @@ class LiveNode:
     def write(self, value: Any) -> None:
         if not self.mutable:
             raise TypeError(f"{self.path} is not assignable")
-        if self.access == "attr":
+        if self.access == "exposure":
+            bounds = self.parent.bounds
+            if bounds and not bounds[0] <= value <= bounds[1]:
+                raise ValueError(f"{value!r} is outside declared bounds {bounds}")
+            self.parent.set(value)
+        elif self.access == "attr":
             setattr(self.parent, self.key, value)
         elif self.access == "item":
             self.parent[self.key] = value
@@ -56,10 +63,23 @@ class RuntimeGraph:
         # Active function frames contain the objects that can affect what the program is
         # doing now; index them first so bounded planner views retain them. Modules come
         # before loose instances so shared objects are expanded under durable paths.
+        self._exposures()
         self._frames()
         self._modules()
         self._objects()
         return self
+
+    def _exposures(self) -> None:
+        """Knobs the host declared with ``samantha.expose``: bounded, preferred."""
+        from samantha import _exposures
+
+        for name, exposure in list(_exposures.items()):
+            node = LiveNode(f"exposed:{name}", None, exposure, name, "exposure", True)
+            try:
+                node.value = node.read()
+            except Exception:
+                continue
+            self._add(node, 0)
 
     def snapshot(
         self, query: str | None = None, limit: int = 500, only_matches: bool = False

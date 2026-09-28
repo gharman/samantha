@@ -119,6 +119,7 @@ class ActController:
             },
             "project_theory": self._project_theory(),
             "source_structure": self._source_structure(),
+            "declared_knobs": self.runtime.declared_knobs(),
             "live_paths": inventory,
             "active_interventions": [
                 group.summary() for group in self.runtime.revertible()
@@ -126,7 +127,9 @@ class ActController:
             "prior_tool_results": transcript,
             "recent_chat": self._recent_chat(),
             "instructions": (
-                "Choose converse for ordinary conversation. Choose inspect when more runtime "
+                "Prefer a declared_knobs path (declared by the host, bounds-checked) "
+                "when one fits the request. Choose converse for ordinary conversation. "
+                "Choose inspect when more runtime "
                 "information is required. Choose act only for operations that advance the "
                 "request. Mark every operation effect read or write. A read-only call does "
                 "not finish a tool turn: always continue planning from its result. Return "
