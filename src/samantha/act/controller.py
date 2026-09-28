@@ -68,10 +68,8 @@ class ActController:
     def _context(
         self, operator_text: str, transcript: list[dict[str, Any]], round_number: int
     ) -> dict[str, Any]:
-        query = operator_text if round_number == 0 else None
-        inventory = self.runtime.inventory(query=query, limit=600)
-        if not inventory:
-            inventory = self.runtime.inventory(limit=600)
+        # Ranked by relevance to the request; the planner can search for the rest.
+        inventory = self.runtime.inventory(query=operator_text, limit=300)
         return {
             "mode": "act",
             "operator_request": operator_text,

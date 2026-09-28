@@ -711,3 +711,20 @@ def test_malformed_value_json_fails_instead_of_assigning_none(
     failure = llm.contexts[1]["prior_tool_results"][0]["results"][0]
     assert failure["ok"] is False
     assert "invalid value_json 'fast'" in failure["detail"]
+
+
+def test_natural_language_queries_rank_relevant_live_paths_first(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    module.filler = {f"setting_{index}": index for index in range(300)}
+    module.sampling_weights = {"head_0": 1.0, "head_1": 0.25}
+    graph = RuntimeGraph(tmp_path).refresh()
+    ranked = graph.snapshot("please increase the sampling weight for head_1", limit=5)
+    assert ranked[0]["path"] == 'module:runtime_demo::sampling_weights/"head_1"'
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "find it", [{"op": "search", "path": "", "query": "head_1 sampling weight"}]
+    )
+    found = [item["path"] for item in group.results[0].value]
+    assert found and all("sampling_weights" in path for path in found)
