@@ -37,15 +37,22 @@ class ChatServer:
         self.thread.start()
 
     def _serve(self) -> None:
-        try:
-            assert self.sock
-            while self.running:
+        assert self.sock
+        while self.running:
+            try:
                 client, _ = self.sock.accept()
-                with client:
+            except OSError as exc:
+                if self.running:
+                    logging.getLogger("samantha").warning("chat disabled: %s", exc)
+                return
+            # One operator's failure or disconnect must never end the chat plane.
+            with client:
+                try:
                     self._client(client)
-        except Exception as exc:
-            if self.running:
-                logging.getLogger("samantha").warning("chat disabled: %s", exc)
+                except OSError:
+                    pass
+                except Exception as exc:
+                    logging.getLogger("samantha").warning("chat client failed: %s", exc)
 
     def _client(self, client: socket.socket) -> None:
         client.sendall(
@@ -66,11 +73,19 @@ class ChatServer:
             self.resident.journal.write(
                 "chat", direction="in", text=json.dumps(message)
             )
-            response = self._handle(message)
-            client.sendall(encode("status", **response))
+            try:
+                response = self._handle(message)
+            except Exception as exc:
+                logging.getLogger("samantha").warning("chat request failed: %s", exc)
+                response = {
+                    "ok": False,
+                    "mode": self.resident.config.mode,
+                    "error": f"Samantha could not answer: {type(exc).__name__}: {exc}",
+                }
             self.resident.journal.write(
                 "chat", direction="out", text=json.dumps(response)
             )
+            client.sendall(encode("status", **response))
             if message["type"] == "bye":
                 break
 
