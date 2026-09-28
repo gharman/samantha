@@ -81,3 +81,12 @@ baselines, along with the ledger's trust ladder and the unused metric helpers. T
 ledger now records only protected paths and declared knobs. `samantha.expose()`
 declarations are offered to the act planner as bounds-checked `exposed:` paths, and
 `samantha.silence()` pauses sentinel wakes.
+
+## Owning-thread calls without host hooks
+
+Thread-affine objects reject calls from the chat thread. Rather than require a host
+pump or executor, a call that fails with a thread-affinity error is retried on the
+owning thread identified by the error. PEP 669 monitoring enables LINE events only
+on code objects currently on that thread's stack, the first event on that thread
+runs the call, and the monitoring is removed. A thread blocked in native code times
+out, and a cancelled job never runs later.

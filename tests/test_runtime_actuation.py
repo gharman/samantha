@@ -1053,3 +1053,69 @@ def test_until_failure_reverts_on_failure_signals(
         pass
     assert group.status == "reverted"
     assert module.explode is explode and module.config["topic"] == "general"
+
+
+def test_thread_bound_objects_are_called_on_their_owning_thread(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    import sqlite3
+    import threading
+    import time
+
+    module = runtime_module(tmp_path, monkeypatch)
+    ready, stop = threading.Event(), threading.Event()
+
+    def host() -> None:
+        module.db = sqlite3.connect(":memory:")
+        module.db.execute("create table steps (loss real)")
+        module.db.executemany("insert into steps values (?)", [(0.9,), (0.7,)])
+        ready.set()
+        while not stop.is_set():  # a host loop doing ordinary Python work
+            time.sleep(0.005)
+
+    def losses() -> list[float]:
+        return [row[0] for row in module.db.execute("select loss from steps")]
+
+    losses.__module__ = module.__name__
+    module.losses = losses
+    thread = threading.Thread(target=host, daemon=True)
+    thread.start()
+    ready.wait(5)
+    try:
+        operator = RuntimeOperator(resident(tmp_path))
+        group = operator.execute(
+            "show losses", [{"op": "call", "path": "module:runtime_demo::losses"}]
+        )
+        result = group.results[0]
+        assert result.ok, result.detail
+        assert result.value == [0.9, 0.7]
+        assert "owning thread" in result.detail
+    finally:
+        stop.set()
+        thread.join(5)
+
+
+def test_injection_times_out_without_running_later() -> None:
+    import threading
+
+    import pytest
+
+    from samantha.act.onthread import InjectionTimeout, run_on_thread
+
+    release, started = threading.Event(), threading.Event()
+    ran: list[bool] = []
+
+    def blocked() -> None:
+        started.set()
+        release.wait(5)  # stuck in a native wait: no Python lines execute
+        for _ in range(3):
+            pass
+
+    thread = threading.Thread(target=blocked, daemon=True)
+    thread.start()
+    started.wait(5)
+    with pytest.raises(InjectionTimeout):
+        run_on_thread(thread.ident, lambda: ran.append(True), timeout=0.2)
+    release.set()
+    thread.join(5)
+    assert ran == []

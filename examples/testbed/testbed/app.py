@@ -11,6 +11,7 @@ import samantha  # noqa: F401 - arming the resident is the behavior under test
 import argparse
 import logging
 import queue
+import sqlite3
 import sys
 import threading
 import time
@@ -40,6 +41,9 @@ class Trainer:
 
     def __init__(self) -> None:
         self.paused = False
+        # Bound to the creating (main) thread, like most application databases.
+        self.db = sqlite3.connect(":memory:")
+        self.db.execute("create table steps (step integer, loss real)")
 
     def status(self) -> str:
         weights = ", ".join(f"{k}={v}" for k, v in cfg["sampling_weights"].items())
@@ -49,6 +53,12 @@ class Trainer:
     def boost(self, head: str, weight: float) -> str:
         cfg["sampling_weights"][head] = float(weight)
         return f"{head} sampling weight set to {weight}"
+
+    def history(self, limit: int = 5) -> list[tuple[int, float]]:
+        rows = self.db.execute(
+            "select step, loss from steps order by step desc limit ?", (limit,)
+        )
+        return [(step, round(loss, 3)) for step, loss in rows]
 
     def pause(self) -> None:
         self.paused = True
@@ -86,6 +96,7 @@ def train_step(step: int, scores: list[float]) -> None:
         scores[i] += min(gain, max(0.0, target - scores[i]))
         emit(f"fidelity head_{i}: {scores[i]:.3f} (ceiling {ceiling:.3f})")
     loss = sum(ceilings[i] - scores[i] for i in range(len(ceilings)))
+    trainer.db.execute("insert into steps values (?, ?)", (step, loss))
     emit(f"[{settings.phase_label}] step={step} loss={loss:.3f} gpu/util: 72%")
 
 
