@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import gc
 import inspect
 import logging
 import queue
+import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -241,7 +243,7 @@ class RuntimeOperator:
             kwargs = self._resolve_refs(operation.get("kwargs") or {})
             result = target(*args, **kwargs)
             if inspect.isawaitable(result):
-                result = asyncio.run(result)
+                result = _await_on_host(result)
             return OperationResult(
                 op, path, True, "existing callable returned", True, result
             )
@@ -405,6 +407,55 @@ class RuntimeOperator:
         if isinstance(value, list):
             return [self._resolve_refs(item) for item in value]
         return value
+
+
+HOST_AWAIT_TIMEOUT = 120.0
+
+
+def _await_on_host(awaitable: Any) -> Any:
+    """Await on the host's running event loop so loop-bound objects keep working.
+
+    A fresh ``asyncio.run`` loop on the chat thread breaks sessions, pools, and
+    futures created by the host's loop ("attached to a different loop").
+    """
+    loop = _running_host_loop()
+    if loop is None:
+        return asyncio.run(_awaited(awaitable))
+    future = asyncio.run_coroutine_threadsafe(_awaited(awaitable), loop)
+    try:
+        return future.result(HOST_AWAIT_TIMEOUT)
+    except TimeoutError:
+        future.cancel()
+        raise TimeoutError(
+            f"host event loop did not finish the call in {HOST_AWAIT_TIMEOUT:.0f}s"
+        ) from None
+
+
+async def _awaited(awaitable: Any) -> Any:
+    return await awaitable
+
+
+def _running_host_loop() -> asyncio.AbstractEventLoop | None:
+    current = threading.get_ident()
+    for thread_id, frame in sys._current_frames().items():
+        if thread_id == current:
+            continue
+        while frame:
+            candidate = frame.f_locals.get("self")
+            if isinstance(candidate, asyncio.AbstractEventLoop) and (
+                candidate.is_running() and not candidate.is_closed()
+            ):
+                return candidate
+            frame = frame.f_back
+    # Loops implemented in C (uvloop) have no Python frames on the host thread.
+    for value in gc.get_objects():
+        if (
+            isinstance(value, asyncio.AbstractEventLoop)
+            and value.is_running()
+            and not value.is_closed()
+        ):
+            return value
+    return None
 
 
 def _length(value: Any) -> int | None:

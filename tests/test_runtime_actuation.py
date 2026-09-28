@@ -817,3 +817,47 @@ def test_revert_removes_unfired_one_shot_interceptors_and_output_rules(
     assert operator.revert(group.id)
     assert module.generate is original
     assert current.observer.streamtap.rewrites == []
+
+
+def test_async_calls_run_on_the_hosts_event_loop(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    import asyncio
+    import threading
+
+    module = runtime_module(tmp_path, monkeypatch)
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    class Service:
+        def __init__(self) -> None:
+            # Bound to the host loop, like a client session or connection pool.
+            self.answer = loop.create_future()
+
+        async def fetch(self) -> str:
+            return await self.answer
+
+    def host() -> None:
+        asyncio.set_event_loop(loop)
+        module.service = Service()
+        # Still pending when Samantha awaits it, so the await must suspend on this loop.
+        loop.call_later(0.2, module.service.answer.set_result, "from the host loop")
+        module.fetch = module.service.fetch
+        ready.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=host, daemon=True)
+    thread.start()
+    ready.wait(5)
+    try:
+        operator = RuntimeOperator(resident(tmp_path))
+        group = operator.execute(
+            "fetch", [{"op": "call", "path": "module:runtime_demo::fetch"}]
+        )
+        result = group.results[0]
+        assert result.ok, result.detail
+        assert result.value == "from the host loop"
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(5)
+        loop.close()
