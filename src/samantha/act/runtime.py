@@ -126,8 +126,8 @@ class RuntimeOperator:
             node = self.graph.get(path)
         except KeyError as exc:
             return OperationResult(op, path, False, str(exc))
-        if self._protected(path):
-            return OperationResult(op, path, False, "path is protected")
+        if reason := self._protected(path):
+            return OperationResult(op, path, False, reason)
         lock = self._locks.setdefault(path, threading.Lock())
         if not lock.acquire(blocking=False):
             return OperationResult(
@@ -317,8 +317,12 @@ class RuntimeOperator:
             rule,
         )
 
-    def _protected(self, path: str) -> bool:
-        return any(pattern.search(path) for pattern in self.resident.ledger.protect)
+    def _protected(self, path: str) -> str | None:
+        for pattern in self.resident.ledger.protect:
+            if match := pattern.search(path):
+                hit = match.group(1) if match.groups() else match.group(0)
+                return f"path is protected (matched {hit!r} via /{pattern.pattern}/)"
+        return None
 
     def _callable_allowed(self, target: Any) -> bool:
         if any(

@@ -53,6 +53,47 @@ def runtime_module(tmp_path: Path, monkeypatch: object) -> types.ModuleType:
     return module
 
 
+def test_retrieval_path_is_not_protected_by_eval_substring(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    module.retrieval_count = 1
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "bump the retrieval counter",
+        [
+            {
+                "op": "set",
+                "path": "module:runtime_demo::retrieval_count",
+                "value": 2,
+            }
+        ],
+    )
+    assert group.results[0].ok
+    assert module.retrieval_count == 2
+
+
+def test_eval_path_is_protected_and_names_the_matched_keyword(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    module.eval_count = 1
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "tamper with eval state",
+        [
+            {
+                "op": "set",
+                "path": "module:runtime_demo::eval_count",
+                "value": 2,
+            }
+        ],
+    )
+    assert not group.results[0].ok
+    assert "'eval'" in group.results[0].detail
+    assert module.eval_count == 1
+
+
 def test_suspended_project_instances_are_discoverable(
     tmp_path: Path, monkeypatch: object
 ) -> None:

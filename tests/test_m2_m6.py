@@ -210,12 +210,27 @@ def test_claim_demotion(tmp_path: Path) -> None:
 def test_ledger_protection_and_promotion(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "ledger.json")
     assert ledger.register("eval_seed")["state"] == "protected"
-    ledger.register("lr", (0.0, 1.0))
+    assert ledger.register("lr", (0.0, 1.0))["state"] == "candidate"
     ledger.transition("lr", "probed")
     ledger.outcome("lr", True)
     ledger.outcome("lr", True)
     assert ledger.authorized("lr", 0.5)
     assert not ledger.authorized("lr", 2.0)
+
+
+def test_ledger_protection_does_not_match_substrings(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "ledger.json")
+    for knob in (
+        "retrieval",
+        "retriever",
+        "latest",
+        "evaluate",
+        "contest",
+        "attestation",
+    ):
+        assert ledger.register(knob)["state"] == "candidate", knob
+    for knob in ("eval", "seed", "test", "tests", "ckpt", "checkpoint", "eval_seed"):
+        assert ledger.register(knob)["state"] == "protected", knob
 
 
 def test_three_run_report(tmp_path: Path) -> None:
