@@ -201,11 +201,37 @@ class RuntimeGraph:
                     LiveNode(path, child, value, index, "item", mutable), depth + 1
                 )
         else:
-            for attr, child in list(_safe_vars(value).items())[:100]:
+            namespace = _safe_vars(value)
+            if isinstance(value, type) and self._project_class(value):
+                # vars(cls) is a mappingproxy; the class attribute is the assignable
+                # target that changes behavior for every instance.
+                namespace = dict(vars(value))
+            for attr, child in list(namespace.items())[:100]:
                 if attr.startswith("__"):
                     continue
                 path = f"{node.path}/{attr}"
                 self._add(LiveNode(path, child, value, attr, "attr", True), depth + 1)
+            if not isinstance(value, type) and self._project_class(type(value)):
+                self._methods(node, value, namespace, depth)
+
+    def _methods(
+        self, node: LiveNode, value: Any, namespace: dict[str, Any], depth: int
+    ) -> None:
+        """Expose public methods of project instances as callable, bound paths."""
+        for name in _public_methods(type(value), self._project_class):
+            if name in namespace:
+                continue
+            # Read through getattr so a call binds self; assign via the class path.
+            method = LiveNode(f"{node.path}/{name}", None, value, name, "attr", False)
+            try:
+                method.value = method.read()
+            except Exception:
+                continue
+            self._add(method, depth + 1)
+
+    def _project_class(self, cls: type) -> bool:
+        module = sys.modules.get(getattr(cls, "__module__", ""))
+        return isinstance(module, types.ModuleType) and self._project_module(module)
 
     def _project_module(self, module: types.ModuleType) -> bool:
         return self._project_file(getattr(module, "__file__", ""))
@@ -218,6 +244,21 @@ class RuntimeGraph:
         return (
             path.is_file() and self.root in path.parents and ".venv" not in path.parts
         )
+
+
+def _public_methods(cls: type, is_project: Any) -> list[str]:
+    names: dict[str, None] = {}
+    for base in cls.__mro__:
+        if not is_project(base):
+            continue
+        for name, attr in vars(base).items():
+            if name.startswith("_"):
+                continue
+            if inspect.isfunction(attr) or isinstance(
+                attr, (classmethod, staticmethod)
+            ):
+                names.setdefault(name)
+    return list(names)[:50]
 
 
 def _safe_vars(value: Any) -> dict[str, Any]:
