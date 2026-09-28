@@ -288,6 +288,32 @@ def test_one_shot_output_rewrite_is_specific_and_expires() -> None:
     assert rules == []
 
 
+class _Terminal(io.StringIO):
+    encoding = "utf-8"
+    errors = "strict"
+
+    def isatty(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        return 1
+
+
+def test_tee_presents_wrapped_terminal_interface() -> None:
+    terminal = _Terminal()
+    lines: list[str] = []
+    stream = Tee(terminal, "stdout", lambda source, line: lines.append(line))
+    assert stream.isatty() is True
+    assert stream.fileno() == 1
+    assert stream.encoding == "utf-8"
+    assert stream.errors == "strict"
+    assert stream.writable() is True
+    stream.writelines(["a\n", "b\n"])
+    print("c", file=stream)
+    assert terminal.getvalue() == "a\nb\nc\n"
+    assert lines == ["a", "b", "c"]
+
+
 def test_reachable_external_api_accepts_live_object_references(
     tmp_path: Path, monkeypatch: object
 ) -> None:
