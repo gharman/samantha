@@ -69,3 +69,19 @@ def test_failed_request_returns_error_and_chat_continues(server: ChatServer) -> 
     assert failed["ok"] is False
     assert "provider exploded" in str(failed["error"])
     assert ask(server, "again")["reply"] == "echo again"
+
+
+def test_second_client_is_served_while_first_stays_attached(
+    server: ChatServer,
+) -> None:
+    with socket.socket(socket.AF_UNIX) as first:
+        first.settimeout(5)
+        first.connect(str(server.path))
+        first_in = first.makefile("rb")
+        assert json.loads(first_in.readline())["type"] == "hello"
+        # The first operator stays attached and idle while a second one talks.
+        assert ask(server, "from the second terminal")["reply"] == (
+            "echo from the second terminal"
+        )
+        first.sendall(b'{"type":"command","text":"from the first"}\n')
+        assert json.loads(first_in.readline())["reply"] == "echo from the first"

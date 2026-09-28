@@ -18,6 +18,8 @@ class ChatServer:
         self.sock: socket.socket | None = None
         self.thread: threading.Thread | None = None
         self.running = False
+        # Several terminals may attach at once; their requests take turns.
+        self._turn = threading.Lock()
 
     def start(self) -> None:
         self.runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -45,14 +47,22 @@ class ChatServer:
                 if self.running:
                     logging.getLogger("samantha").warning("chat disabled: %s", exc)
                 return
-            # One operator's failure or disconnect must never end the chat plane.
-            with client:
-                try:
-                    self._client(client)
-                except OSError:
-                    pass
-                except Exception as exc:
-                    logging.getLogger("samantha").warning("chat client failed: %s", exc)
+            threading.Thread(
+                target=self._session,
+                args=(client,),
+                name="samantha-chat-client",
+                daemon=True,
+            ).start()
+
+    def _session(self, client: socket.socket) -> None:
+        # One operator's failure or disconnect must never end the chat plane.
+        with client:
+            try:
+                self._client(client)
+            except OSError:
+                pass
+            except Exception as exc:
+                logging.getLogger("samantha").warning("chat client failed: %s", exc)
 
     def _client(self, client: socket.socket) -> None:
         client.sendall(
@@ -74,7 +84,8 @@ class ChatServer:
                 "chat", direction="in", text=json.dumps(message)
             )
             try:
-                response = self._handle(message)
+                with self._turn:
+                    response = self._handle(message)
             except Exception as exc:
                 logging.getLogger("samantha").warning("chat request failed: %s", exc)
                 response = {
