@@ -389,10 +389,4 @@ Analyzed {len(inventory.get("files", {}))} project files.
         return []
 
     def _recent_journal(self, limit: int = 50) -> list[dict[str, Any]]:
-        rows = []
-        try:
-            for line in self.resident.journal.path.read_text().splitlines()[-limit:]:
-                rows.append(json.loads(line))
-        except (OSError, json.JSONDecodeError):
-            pass
-        return rows
+        return self.resident.journal.recent(limit)

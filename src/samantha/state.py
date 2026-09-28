@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,12 @@ class Journal:
         self.path = root / f"journal-{self.run_id}.jsonl"
         self._seq = 0
         self._lock = threading.Lock()
+        self._stream: Any = None
+        # Readers need recent context on every chat round; serve it from memory rather
+        # than re-reading a journal that grows for the life of the process. Chat keeps
+        # its own buffer so bursts of metric rows cannot evict the conversation.
+        self._recent: deque[dict[str, Any]] = deque(maxlen=200)
+        self._chat: deque[dict[str, Any]] = deque(maxlen=100)
 
     def write(self, event_type: str, **fields: Any) -> dict[str, Any]:
         with self._lock:
@@ -70,9 +77,30 @@ class Journal:
                     **fields,
                 }
             )
-            with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+            if self._stream is None:
+                # Reopening per row cost ~20x a held handle on every metric line.
+                self._stream = self.path.open("a", encoding="utf-8")
+            self._stream.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+            self._stream.flush()
+            self._recent.append(row)
+            if event_type == "chat":
+                self._chat.append(row)
             return row
+
+    def recent(
+        self, limit: int = 50, event_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = list(self._chat if event_type == "chat" else self._recent)
+        if event_type not in {None, "chat"}:
+            rows = [row for row in rows if row.get("type") == event_type]
+        return rows[-limit:]
+
+    def close(self) -> None:
+        with self._lock:
+            if self._stream is not None:
+                self._stream.close()
+                self._stream = None
 
 
 def load_json(path: Path, default: Any) -> Any:
