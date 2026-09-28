@@ -10,6 +10,7 @@ import logging
 import queue
 import sys
 import threading
+import types
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -267,9 +268,13 @@ class RuntimeOperator:
         signature = inspect.signature(original)
         restored = False
         output_rewrite_activated = False
+        aliases = self._aliases_of(original, node)
 
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             nonlocal output_rewrite_activated, restored
+            if restored:
+                # A fired one-shot is inert even through references taken earlier.
+                return original(*args, **kwargs)
             bound = signature.bind_partial(*args, **kwargs)
             condition = metadata.get("when", {}) if isinstance(metadata, dict) else {}
             contains = (
@@ -308,7 +313,8 @@ class RuntimeOperator:
                     )
                     output_rewrite_activated = True
             if matches and lifetime == "one_shot" and not restored:
-                node.write(original)
+                for target in (node, *aliases):
+                    target.write(original)
                 restored = True
             result = original(*bound.args, **bound.kwargs)
             if matches and isinstance(metadata, dict):
@@ -321,6 +327,12 @@ class RuntimeOperator:
                 )
             return result
 
+        # Callers that did `from module import f` hold their own reference; patch
+        # those module globals too, or the receipt verifies a change nobody calls.
+        for alias in aliases:
+            alias.write(wrapper)
+            group.undo.append((alias, original))
+
         wrapper.__name__ = getattr(original, "__name__", "samantha_interceptor")
         wrapper.__wrapped__ = original
         node.write(wrapper)
@@ -332,10 +344,29 @@ class RuntimeOperator:
             "intercept",
             node.path,
             verified,
-            f"installed {lifetime} argument interceptor",
+            f"installed {lifetime} argument interceptor"
+            + (f" (+{len(aliases)} imported references)" if aliases else ""),
             verified,
             {"overrides": overrides, "lifetime": lifetime},
         )
+
+    def _aliases_of(self, original: Any, target: LiveNode) -> list[LiveNode]:
+        """Other project module globals bound to the same callable object."""
+        found = []
+        for name, module in list(sys.modules.items()):
+            if not isinstance(module, types.ModuleType):
+                continue
+            if not self.graph._project_module(module):
+                continue
+            for attr, value in list(vars(module).items()):
+                if value is not original:
+                    continue
+                if module is target.parent and attr == target.key:
+                    continue
+                path = f"module:{name}::{attr}"
+                if not self._protected(path):
+                    found.append(LiveNode(path, value, module, attr, "attr", True))
+        return found
 
     def _rewrite_output(
         self, group: InterventionGroup, operation: dict[str, Any]
