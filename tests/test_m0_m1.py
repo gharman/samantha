@@ -237,3 +237,13 @@ def test_journal_holds_one_handle_and_serves_recent_rows(
     assert len(journal.path.read_text().splitlines()) == 1_001
     assert journal.recent(1)[0]["payload"] == {"step": 999}
     assert journal.recent(5, "chat")[0]["text"] == "what is the loss doing?"
+
+
+def test_metric_extraction_is_linear_on_long_tokens() -> None:
+    import time
+
+    metrics = MetricStore()
+    started = time.perf_counter()
+    found = metrics.ingest("payload=" + "x" * 20_000 + ", loss=0.5")
+    assert time.perf_counter() - started < 0.1  # quadratic backtracking took ~24 s
+    assert found == [{"series": "loss", "value": 0.5}]

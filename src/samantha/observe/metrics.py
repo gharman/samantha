@@ -8,12 +8,17 @@ from collections import defaultdict, deque
 from typing import Any
 
 NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|[-+]?inf|nan"
+# Names start only at a token boundary and never give characters back, so each
+# token is scanned once. Without both, a long word (a hash, base64, minified JSON)
+# was rescanned from every offset, and a 2,000-character token took ~240 ms.
+NAME_START = r"(?<![\w./-])[A-Za-z]"
 PAIR = re.compile(
-    rf"(?P<name>[A-Za-z][\w./-]*(?:\s+[A-Za-z][\w.-]*)?)\s*[:=]\s*(?P<value>{NUMBER})\s*(?P<pct>%?)",
+    rf"(?P<name>{NAME_START}[\w./-]*+(?:\s+[A-Za-z][\w.-]*+)?)"
+    rf"\s*[:=]\s*(?P<value>{NUMBER})\s*(?P<pct>%?)",
     re.I,
 )
 SPACE = re.compile(
-    rf"(?P<name>[A-Za-z][\w./-]+)\s+(?P<value>{NUMBER})(?P<pct>%)?", re.I
+    rf"(?P<name>{NAME_START}[\w./-]++)\s+(?P<value>{NUMBER})(?P<pct>%)?", re.I
 )
 CEILING = re.compile(
     rf"(?:ceiling|target|expected|budget|limit)\s*[:=]?\s*(?P<value>{NUMBER})", re.I
