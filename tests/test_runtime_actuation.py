@@ -651,3 +651,20 @@ def test_methods_of_live_objects_are_callable_and_interceptable(
     )
     assert group.results[0].ok, group.results[0].detail
     assert module.client.status() == "healthy: 3 jobs (verbose)"
+
+
+def test_instance_scan_is_limited_to_project_classes(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    from collections import OrderedDict
+
+    module = runtime_module(tmp_path, monkeypatch)
+    module.OrderedDict = OrderedDict  # an imported library class
+    noise = [OrderedDict(value=index) for index in range(3_000)]
+    workers = [module.Worker() for _ in range(5)]
+    graph = RuntimeGraph(tmp_path).refresh()
+    roots = [path for path in graph.nodes if path.startswith("object:")]
+    assert not any("OrderedDict" in path for path in roots)
+    for worker in workers:
+        assert any(path.endswith(f":{id(worker)}") for path in roots)
+    assert noise

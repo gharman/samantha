@@ -148,10 +148,13 @@ class RuntimeGraph:
                 module
             ):
                 continue
+            # Only classes the project defines: an imported library class (Path,
+            # OrderedDict, Tensor) would fill the node budget with its instances and
+            # crowd out the project's own objects.
             project_types.update(
                 value
                 for value in _safe_vars(module).values()
-                if isinstance(value, type)
+                if isinstance(value, type) and self._project_class(value)
             )
         if not project_types:
             return
