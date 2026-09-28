@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .introspect import LiveNode, RuntimeGraph, _preview
+from .onthread import owner_thread, run_on_thread
 
 
 @dataclass
@@ -304,12 +305,20 @@ class RuntimeOperator:
                 )
             args = self._resolve_refs(operation.get("args") or [])
             kwargs = self._resolve_refs(operation.get("kwargs") or {})
-            result = target(*args, **kwargs)
+            detail = "existing callable returned"
+            try:
+                result = target(*args, **kwargs)
+            except Exception as exc:
+                # Objects bound to the thread that created them refuse the chat
+                # thread; run the call on that thread at its next line instead.
+                owner = owner_thread(exc)
+                if owner is None or owner == threading.get_ident():
+                    raise
+                result = run_on_thread(owner, lambda: target(*args, **kwargs))
+                detail = f"existing callable returned on its owning thread {owner}"
             if inspect.isawaitable(result):
                 result = _await_on_host(result)
-            return OperationResult(
-                op, path, True, "existing callable returned", True, result
-            )
+            return OperationResult(op, path, True, detail, True, result)
         if op == "intercept":
             return self._intercept(group, node, operation)
         raise ValueError(f"unsupported operation: {op}")

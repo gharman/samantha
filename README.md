@@ -101,6 +101,12 @@ intercepts that callable directly and can condition changes on message content.
 Raw stdout/stderr rewriting is a fallback because console libraries may bypass
 Python's current `sys.stdout` or `sys.stderr` wrappers.
 
+Calls run on Samantha's chat thread. Coroutines are awaited on the host's running
+event loop, and objects bound to the thread that created them (such as a sqlite3
+connection) are called on that thread: Samantha briefly enables `sys.monitoring`
+line events on the owning thread's current stack and runs the call at its next line,
+with no host instrumentation.
+
 Related operations form an intervention group with an inferred `one_shot`,
 `temporary`, `process`, `until_failure`, or contextual lifetime. Successful
 changes remain when that lifetime calls for it; retained inverse assignments
