@@ -276,3 +276,23 @@ def test_host_basic_config_works_and_logged_metrics_are_observed_once(
         for handler in saved[1]:
             root.addHandler(handler)
     assert list(observer.metrics.series["loss"]) == [0.5]
+
+
+def test_source_inventory_works_under_hidden_directories_and_skips_venvs(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / ".projects" / "app"
+    (root / "pkg").mkdir(parents=True)
+    (root / ".venv" / "lib").mkdir(parents=True)
+    (root / "main.py").write_text("import pkg.helpers\n")
+    (root / "pkg" / "__init__.py").write_text("")
+    (root / "pkg" / "helpers.py").write_text('"""Helpers."""\n')
+    (root / "tools.py").write_text('"""Not imported by the entry point."""\n')
+    (root / ".venv" / "lib" / "vendored.py").write_text("x = 1\n")
+    inventory = read_source(root / "main.py", root)
+    assert set(inventory["files"]) == {
+        "main.py",
+        "pkg/__init__.py",
+        "pkg/helpers.py",
+        "tools.py",
+    }

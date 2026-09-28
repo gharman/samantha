@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 import tomllib
 from pathlib import Path
@@ -18,6 +19,7 @@ IGNORED_DIRS = {
     "build",
     "dist",
     "__pycache__",
+    "site-packages",
     ".tox",
     ".mypy_cache",
     ".pytest_cache",
@@ -70,12 +72,26 @@ def read_source(path: Path, root: Path, budget: int = 180_000) -> dict[str, Any]
     return result
 
 
+def _project_python_files(root: Path) -> list[Path]:
+    """Walk the project, pruning ignored and hidden directories below the root.
+
+    Filtering after rglob still traversed every virtualenv on the host's import
+    thread, and testing absolute path parts dropped every file when the project
+    itself lived under a hidden directory.
+    """
+    found = []
+    for directory, subdirectories, files in os.walk(root):
+        subdirectories[:] = sorted(
+            name
+            for name in subdirectories
+            if name not in IGNORED_DIRS and not name.startswith(".")
+        )
+        found.extend(Path(directory) / name for name in files if name.endswith(".py"))
+    return found
+
+
 def _ordered_candidates(entry: Path, root: Path) -> list[Path]:
-    python_files = [
-        path
-        for path in root.rglob("*.py")
-        if not any(part in IGNORED_DIRS or part.startswith(".") for part in path.parts)
-    ]
+    python_files = _project_python_files(root)
     closure = _import_closure(entry, root, python_files)
     remainder = sorted(
         (path for path in python_files if path not in closure),

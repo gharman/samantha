@@ -47,3 +47,12 @@ def test_connect_to_socket_without_listener_is_friendly(
     assert cli.connect(path) == 1
     assert "no longer running" in capsys.readouterr().out
     assert not path.exists()
+
+
+def test_overlong_runtime_dir_falls_back_to_a_socket_safe_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/tmp/" + "nested/" * 20)
+    assert cli.runtime_dir() == Path(f"/tmp/samantha-{os.getuid()}") / "samantha"
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/501")
+    assert cli.runtime_dir() == Path("/run/user/501/samantha")

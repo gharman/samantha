@@ -13,8 +13,15 @@ from typing import Any
 
 
 def runtime_dir() -> Path:
-    base = Path(os.getenv("XDG_RUNTIME_DIR", f"/tmp/samantha-{os.getuid()}"))
-    return base / "samantha"
+    fallback = Path(f"/tmp/samantha-{os.getuid()}") / "samantha"
+    configured = os.getenv("XDG_RUNTIME_DIR")
+    if not configured:
+        return fallback
+    candidate = Path(configured) / "samantha"
+    # "<pid>.sock" must fit the AF_UNIX path limit (104 bytes on macOS).
+    if len(str(candidate / "4294967295.sock").encode()) > 100:
+        return fallback
+    return candidate
 
 
 def parser() -> argparse.ArgumentParser:

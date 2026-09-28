@@ -85,3 +85,18 @@ def test_second_client_is_served_while_first_stays_attached(
         )
         first.sendall(b'{"type":"command","text":"from the first"}\n')
         assert json.loads(first_in.readline())["reply"] == "echo from the first"
+
+
+def test_observe_mode_reply_explains_the_mode(tmp_path: Path) -> None:
+    resident = SimpleNamespace(
+        config=SimpleNamespace(mode="observe", model="test-model"),
+        key="project",
+        root=tmp_path,
+        state=tmp_path,
+        journal=Journal(tmp_path, "run"),
+    )
+    reply = ChatServer(resident, tmp_path / "run")._handle(
+        {"type": "command", "text": "hello?"}
+    )
+    assert "observe mode" in reply["reply"]
+    assert "OPENAI_API_KEY" not in reply["reply"]
