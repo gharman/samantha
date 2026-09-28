@@ -26,6 +26,17 @@ def operator_intent(resident: Any) -> dict[str, Any]:
     }
 
 
+WAKE_INSTRUCTIONS = """
+A sentinel fired. Assess it against the evidence below and respond with an
+assessment and at most three actions. Return no actions when the program is
+healthy or the evidence does not clear the bar. Action types:
+- flag: a falsifiable concern; cite the evidence and what would disprove it.
+- question: one question about operator intent that would change your advice.
+- proposal: a specific change (source diff or configuration) with a prediction:
+  metric, direction, magnitude, and horizon.
+"""
+
+
 class Cognition:
     def __init__(self, resident: Any, llm: Any) -> None:
         self.resident, self.llm = resident, llm
@@ -41,6 +52,9 @@ class Cognition:
         self._drainer: threading.Thread | None = None
         self._drainer_lock = threading.Lock()
         self._dropped = False
+
+        # Findings wait here until the operator's next chat reply carries them.
+        self.notices: deque[str] = deque(maxlen=20)
 
     def start(self) -> None:
         threading.Thread(
@@ -249,7 +263,8 @@ Analyzed {len(inventory.get("files", {}))} project files.
         )
         try:
             response = self.llm.complete(
-                [{"role": "user", "content": CHARTER + "\n" + prompt}], event.sentinel
+                [{"role": "user", "content": CHARTER + WAKE_INSTRUCTIONS + prompt}],
+                f"wake:{event.sentinel}",
             )
         except Exception as exc:
             logging.getLogger("samantha").warning("cognition disabled: %s", exc)
@@ -279,10 +294,12 @@ Analyzed {len(inventory.get("files", {}))} project files.
                 body.setdefault("evidence", evidence)
                 self.open_flags[body["id"]] = body
                 self.resident.journal.write("flag", **body)
+                self._notify(kind, body)
             elif kind == "question":
                 body.setdefault("id", uuid.uuid4().hex[:8])
                 body.setdefault("status", "pending")
                 self.resident.journal.write("question", **body)
+                self._notify(kind, body)
             elif kind in {"proposal", "intervene"}:
                 if kind == "intervene" and self.resident.config.mode != "act":
                     body = {
@@ -291,8 +308,20 @@ Analyzed {len(inventory.get("files", {}))} project files.
                         "rationale": "intervention rejected outside act mode",
                     }
                 self.resident.journal.write("proposal", **body)
+                self._notify("proposal", body.get("body", body))
             elif kind == "update_model":
                 (self.resident.state / "model.md").write_text(str(body.get("text", "")))
+
+    def _notify(self, kind: str, body: dict[str, Any]) -> None:
+        text = str(body.get("summary") or body.get("text") or body.get("knob") or body)
+        notice = f"{kind}: {text}"
+        self.notices.append(notice)
+        logging.getLogger("samantha").info(notice)
+
+    def drain_notices(self) -> list[str]:
+        drained = list(self.notices)
+        self.notices.clear()
+        return drained
 
     def chat(self, text: str) -> str:
         """Answer a local operator without blocking host code."""

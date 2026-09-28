@@ -316,3 +316,37 @@ def test_goals_reach_chat_and_act_contexts_and_questions_are_not_hijacked(
     resident.ledger = Ledger(tmp_path / "ledger.json")
     ActController(resident, RecordingLLM()).handle("push toward it")
     assert '"current_goal": "every head at ceiling"' in seen[-1]
+
+
+def test_wake_findings_use_a_schema_and_reach_the_operator(tmp_path: Path) -> None:
+    from samantha.chat.server import ChatServer
+    from samantha.cognition.llm import _wake_format
+
+    schema = _wake_format()["schema"]
+    kinds = schema["properties"]["actions"]["items"]["properties"]["type"]["enum"]
+    assert kinds == ["flag", "question", "proposal"]
+    resident = fake_resident(tmp_path)
+    resident.key = "project"
+    llm = FakeLLM(
+        {
+            "stall": {
+                "assessment": "gpu/util has not moved in 20 samples",
+                "actions": [
+                    {
+                        "type": "flag",
+                        "summary": "gpu/util is pinned at 72%",
+                        "evidence": "20 identical samples",
+                        "prediction": "",
+                    }
+                ],
+            },
+            "chat": {"answer": "Looking into it."},
+        }
+    )
+    resident.cognition = Cognition(resident, llm)
+    resident.cognition.provider_ready = True
+    resident.cognition.wake(WakeEvent("stall", {"series": "gpu.util"}))
+    server = ChatServer(resident, tmp_path / "run")
+    reply = server._handle({"type": "command", "text": "anything wrong?"})
+    assert reply["notices"] == ["flag: gpu/util is pinned at 72%"]
+    assert server._handle({"type": "command", "text": "and now?"})["notices"] == []

@@ -124,10 +124,13 @@ class ChatServer:
                 "reply": f"Goal updated: {goal}",
             }
         if text and (cognition := getattr(self.resident, "cognition", None)):
+            reply = cognition.chat(text)
+            drain = getattr(cognition, "drain_notices", None)
             return {
                 "ok": True,
                 "mode": self.resident.config.mode,
-                "reply": cognition.chat(text),
+                "reply": reply,
+                "notices": drain() if drain else [],
             }
         return {
             "ok": True,

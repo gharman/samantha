@@ -102,6 +102,8 @@ def connect(path: Path) -> int:
                 if not payload:
                     return _continue_detached(hello, line, delivered=True)
                 response = _message(payload)
+                for notice in response.get("notices") or []:
+                    print(f"⚑ {notice}")
                 print(response.get("reply") or response.get("error") or "No response.")
                 print()
                 if kind == "bye":
