@@ -45,16 +45,19 @@ class RuntimeGraph:
         self.max_depth = max_depth
         self.max_nodes = max_nodes
         self.nodes: dict[str, LiveNode] = {}
-        self._seen: set[int] = set()
+        self._seen: dict[int, str] = {}
+        self._aliases: dict[str, str] = {}
 
     def refresh(self) -> "RuntimeGraph":
         self.nodes.clear()
         self._seen.clear()
-        # Active frames contain the objects that can affect what the program is doing now.
-        # Index them before the broader module surface so bounded planner views retain them.
+        self._aliases.clear()
+        # Active function frames contain the objects that can affect what the program is
+        # doing now; index them first so bounded planner views retain them. Modules come
+        # before loose instances so shared objects are expanded under durable paths.
         self._frames()
-        self._objects()
         self._modules()
+        self._objects()
         return self
 
     def snapshot(
@@ -90,13 +93,21 @@ class RuntimeGraph:
                 result["signature"] = str(inspect.signature(value))
             except (TypeError, ValueError):
                 result["signature"] = "unknown"
+        if alias := self._aliases.get(current.path):
+            result["same_object_as"] = alias
         return result
 
     def get(self, path: str) -> LiveNode:
-        try:
+        if path in self.nodes:
             return self.nodes[path]
-        except KeyError as exc:
-            raise KeyError(f"live path not found: {path}") from exc
+        # A shared object's children are indexed once, under the first path that reached
+        # it; resolve paths written through any other name for that object.
+        for prefix in sorted(self._aliases, key=len, reverse=True):
+            if path.startswith(prefix + "/"):
+                resolved = self._aliases[prefix] + path[len(prefix) :]
+                if resolved in self.nodes:
+                    return self.nodes[resolved]
+        raise KeyError(f"live path not found: {path}")
 
     def _modules(self) -> None:
         for name, module in list(sys.modules.items()):
@@ -113,16 +124,21 @@ class RuntimeGraph:
 
     def _frames(self) -> None:
         for thread_id, frame in sys._current_frames().items():
-            depth = 0
-            while frame and depth < 30:
+            stack = []
+            while frame:
+                stack.append(frame)
+                frame = frame.f_back
+            # Number frames from the outermost so an active frame keeps its path while
+            # the thread calls deeper; innermost numbering shifted on every call.
+            for depth, frame in enumerate(reversed(stack)):
+                if frame.f_locals is frame.f_globals:
+                    continue  # module-level code: indexed under its module path
                 if self._project_file(frame.f_code.co_filename):
                     prefix = f"frame:{thread_id}:{frame.f_code.co_name}:{depth}"
                     for name, value in list(frame.f_locals.items()):
                         # CPython fast locals are not safely assignable, but their child
                         # objects remain fully introspectable and mutable.
                         self._add(LiveNode(f"{prefix}::{name}", value), 0)
-                frame = frame.f_back
-                depth += 1
 
     def _objects(self) -> None:
         """Find project instances even when their coroutine frames are suspended."""
@@ -168,8 +184,9 @@ class RuntimeGraph:
             return
         identity = id(value)
         if identity in self._seen:
+            self._aliases[node.path] = self._seen[identity]
             return
-        self._seen.add(identity)
+        self._seen[identity] = node.path
         if isinstance(value, dict):
             for key, child in list(value.items())[:100]:
                 if not isinstance(key, (str, int, float, bool)):
