@@ -229,7 +229,17 @@ def test_ledger_protection_does_not_match_substrings(tmp_path: Path) -> None:
         "attestation",
     ):
         assert ledger.register(knob)["state"] == "candidate", knob
-    for knob in ("eval", "seed", "test", "tests", "ckpt", "checkpoint", "eval_seed"):
+    for knob in (
+        "eval",
+        "seed",
+        "test",
+        "tests",
+        "ckpt",
+        "checkpoint",
+        "eval_seed",
+        'config/"eval-split"',
+        'config/"seed offset"',
+    ):
         assert ledger.register(knob)["state"] == "protected", knob
 
 
