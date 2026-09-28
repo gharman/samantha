@@ -548,3 +548,68 @@ def test_read_call_does_not_complete_an_action_request(
     assert llm.calls == 10
     assert module.config["topic"] == "puppies"
     assert "assignment verified" in reply
+
+
+def running_loop(
+    tmp_path: Path, monkeypatch: object
+) -> tuple[types.ModuleType, object]:
+    import importlib.util
+    import threading
+
+    source = tmp_path / "stable_paths_app.py"
+    source.write_text(
+        "import time\n"
+        "cfg = {'lr': 0.03}\n"
+        "state = {'stop': False, 'tick': 0}\n"
+        "def leaf():\n"
+        "    time.sleep(0.0005)\n"
+        "def loop(cfg):\n"
+        "    while not state['stop']:\n"
+        "        state['tick'] += 1\n"
+        "        leaf() if state['tick'] % 2 else time.sleep(0.0005)\n"
+    )
+    spec = importlib.util.spec_from_file_location("stable_paths_app", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setitem(sys.modules, "stable_paths_app", module)
+    thread = threading.Thread(target=module.loop, args=(module.cfg,), daemon=True)
+    thread.start()
+    return module, thread
+
+
+def test_frame_paths_are_stable_while_the_thread_moves(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module, thread = running_loop(tmp_path, monkeypatch)
+    try:
+        seen = set()
+        for _ in range(30):
+            graph = RuntimeGraph(tmp_path).refresh()
+            seen.update(
+                path
+                for path in graph.nodes
+                if path.startswith("frame:") and path.endswith("::cfg")
+            )
+        assert len(seen) == 1
+    finally:
+        module.state["stop"] = True
+        thread.join(1)
+
+
+def test_shared_objects_resolve_through_every_path(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module, thread = running_loop(tmp_path, monkeypatch)
+    try:
+        operator = RuntimeOperator(resident(tmp_path))
+        group = operator.execute(
+            "raise the learning rate",
+            [{"op": "set", "path": 'module:stable_paths_app::cfg/"lr"', "value": 0.1}],
+        )
+        assert group.results[0].ok, group.results[0].detail
+        assert module.cfg["lr"] == 0.1
+        described = operator.graph.describe("module:stable_paths_app::cfg")
+        assert described["same_object_as"].startswith("frame:")
+    finally:
+        module.state["stop"] = True
+        thread.join(1)
