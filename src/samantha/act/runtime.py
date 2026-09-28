@@ -107,6 +107,8 @@ class RuntimeOperator:
     ) -> OperationResult:
         op = str(operation.get("op", ""))
         path = str(operation.get("path", ""))
+        if error := operation.get("decode_error"):
+            return OperationResult(op, path, False, str(error))
         if op in {"search", "inspect"}:
             return self._read_operation(op, path, operation)
         if op == "emit":

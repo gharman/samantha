@@ -668,3 +668,46 @@ def test_instance_scan_is_limited_to_project_classes(
     for worker in workers:
         assert any(path.endswith(f":{id(worker)}") for path in roots)
     assert noise
+
+
+class MalformedValueLLM:
+    def __init__(self) -> None:
+        self.contexts: list[dict[str, object]] = []
+
+    def plan_action(self, messages: list[dict[str, str]]) -> dict[str, object]:
+        self.contexts.append(json.loads(messages[0]["content"]))
+        operations = []
+        if len(self.contexts) == 1:
+            operations = [
+                {
+                    "op": "set",
+                    "effect": "write",
+                    "path": 'module:runtime_demo::config/"topic"',
+                    "query": None,
+                    "value_json": "fast",  # not JSON: a bare word
+                    "args_json": None,
+                    "kwargs_json": None,
+                    "lifetime": "process",
+                    "reason": "operator asked",
+                }
+            ]
+        return {
+            "intent": "act" if operations else "converse",
+            "reply": "done" if operations else "I could not apply that value.",
+            "done": True,
+            "lifetime": "process",
+            "operations": operations,
+        }
+
+
+def test_malformed_value_json_fails_instead_of_assigning_none(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    llm = MalformedValueLLM()
+    reply = ActController(resident(tmp_path), llm).handle("make the topic fast")
+    assert module.config["topic"] == "general"
+    assert "Applied runtime intervention" not in reply
+    failure = llm.contexts[1]["prior_tool_results"][0]["results"][0]
+    assert failure["ok"] is False
+    assert "invalid value_json 'fast'" in failure["detail"]

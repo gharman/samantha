@@ -216,9 +216,20 @@ class ActController:
         for operation in operations:
             item = dict(operation)
             item["path"] = item.get("path") or ""
-            item["value"] = _decode(item.get("value_json"), None)
-            item["args"] = _decode(item.get("args_json"), [])
-            item["kwargs"] = _decode(item.get("kwargs_json"), {})
+            errors = []
+            for field, target, default in (
+                ("value_json", "value", None),
+                ("args_json", "args", []),
+                ("kwargs_json", "kwargs", {}),
+            ):
+                try:
+                    item[target] = _decode(item.get(field), default)
+                except ValueError as exc:
+                    # Never substitute a default for a malformed value: assigning
+                    # None would look like a verified change.
+                    errors.append(f"invalid {field} {item.get(field)!r}: {exc}")
+            if errors:
+                item["decode_error"] = "; ".join(errors)
             decoded.append(item)
         return decoded
 
@@ -259,7 +270,6 @@ class ActController:
 def _decode(value: Any, default: Any) -> Any:
     if value in (None, ""):
         return default
-    try:
-        return json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return default
+    if not isinstance(value, str):
+        raise ValueError(f"expected a JSON string, got {type(value).__name__}")
+    return json.loads(value)
