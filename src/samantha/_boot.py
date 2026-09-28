@@ -307,7 +307,8 @@ def _inspect(current: Resident, text: str) -> None:
             payload={"sentinel": event.sentinel, "evidence": event.evidence},
         )
         if cognition := getattr(current, "cognition", None):
-            cognition.wake(event)
+            # Sentinels run inside host print/logging calls; the model call must not.
+            cognition.submit(event)
 
 
 def resident() -> Resident | None:

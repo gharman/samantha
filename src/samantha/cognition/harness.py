@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import queue
 import threading
 import time
 import uuid
@@ -24,6 +25,10 @@ class Cognition:
         self.provider_error: str | None = None
         self.analysis_ready: bool | None = None
         self.analysis_error: str | None = None
+        self.pending: queue.Queue[Any] = queue.Queue(maxsize=64)
+        self._drainer: threading.Thread | None = None
+        self._drainer_lock = threading.Lock()
+        self._dropped = False
 
     def start(self) -> None:
         threading.Thread(
@@ -176,6 +181,33 @@ Analyzed {len(inventory.get("files", {}))} project files.
             logging.getLogger("samantha").info(
                 "project watch plan: %s", "; ".join(map(str, watching[:6]))
             )
+
+    def submit(self, event: Any) -> bool:
+        """Queue a wake from an observed host thread without ever blocking it."""
+        with self._drainer_lock:
+            if self._drainer is None:
+                self._drainer = threading.Thread(
+                    target=self._drain, name="samantha-wake", daemon=True
+                )
+                self._drainer.start()
+        try:
+            self.pending.put_nowait(event)
+            return True
+        except queue.Full:
+            if not self._dropped:
+                logging.getLogger("samantha").warning(
+                    "wake queue saturated; dropping sentinel events"
+                )
+                self._dropped = True
+            return False
+
+    def _drain(self) -> None:
+        while True:
+            event = self.pending.get()
+            try:
+                self.wake(event)
+            except Exception as exc:
+                logging.getLogger("samantha").warning("wake failed: %s", exc)
 
     def wake(self, event: Any) -> dict[str, Any] | None:
         if self.provider_ready is False:

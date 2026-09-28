@@ -249,3 +249,34 @@ def test_three_run_report(tmp_path: Path) -> None:
         journal.write("intervention", id=f"i{index}", knob="cfg.weight", old=1, new=2)
     report = generate(tmp_path)
     assert "cfg.weight" in report and "Proposed permanent source change" in report
+
+
+def test_sentinel_wakes_never_block_the_observed_thread(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    from samantha._boot import _inspect
+    from samantha.observe.metrics import MetricStore
+    from samantha.sentinels import Sentinels
+
+    release = threading.Event()
+
+    class BlockingLLM:
+        def complete(self, messages: list, signature: str = "default") -> dict:
+            release.wait(5)
+            return {"actions": []}
+
+    resident = fake_resident(tmp_path)
+    resident.sentinels = Sentinels(MetricStore())
+    resident.cognition = Cognition(resident, BlockingLLM())
+    started = time.monotonic()
+    _inspect(resident, "WARNING disk nearly full")
+    assert time.monotonic() - started < 0.5
+    release.set()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        rows = [json.loads(line) for line in resident.journal.path.read_text().splitlines()]
+        if any(row["type"] == "wake" for row in rows):
+            break
+        time.sleep(0.02)
+    assert any(row["type"] == "wake" and row["sentinel"] == "log-novelty" for row in rows)
