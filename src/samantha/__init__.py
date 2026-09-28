@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from ._boot import arm, resident
+from ._boot import _truthy, arm, resident
+from .state import redact
 
 __version__ = "1.0.0"
 _exposures: dict[str, "Exposure"] = {}
@@ -71,9 +72,57 @@ def silence(minutes: int = 30) -> None:
 
 
 def _invoked_as_cli() -> bool:
+    """True only when this interpreter is running samantha's own CLI."""
+    # During `python -m pkg`, packages import while argv[0] is still "-m".
+    args = iter(getattr(sys, "orig_argv", [])[1:])
+    for arg in args:
+        if arg in {"-X", "-W"}:
+            next(args, None)
+        elif arg.startswith("-m"):
+            module = arg[2:] or next(args, "")
+            return module.split(".")[0] == "samantha"
+        elif arg == "-c" or not arg.startswith("-"):
+            break
     if not sys.argv:
         return False
-    return Path(sys.argv[0]).name in {"samantha", "samantha.exe", "__main__.py"}
+    script = Path(sys.argv[0])
+    if script.name in {"samantha", "samantha.exe"}:
+        return True
+    try:
+        return Path(__file__).resolve().parent in script.resolve().parents
+    except OSError:
+        return False
+
+
+def _multiprocessing_child() -> bool:
+    """True in a multiprocessing helper re-importing the parent's __main__."""
+    # Spawn children and the forkserver start as `python -c "from multiprocessing..."`
+    # and re-import __main__ before parent_process() is set.
+    orig = getattr(sys, "orig_argv", [])
+    for flag, code in zip(orig, orig[1:]):
+        if flag == "-c" and code.startswith("from multiprocessing."):
+            return True
+    mp = sys.modules.get("multiprocessing")
+    if mp is None:
+        return False
+    return mp.parent_process() is not None or mp.current_process().name != "MainProcess"
+
+
+def _should_arm() -> bool:
+    if os.getenv("SAMANTHA") == "off" or _invoked_as_cli():
+        return False
+    return not _multiprocessing_child() or _truthy(os.getenv("SAMANTHA_ARM_CHILDREN"))
+
+
+def _report_disabled(error: Exception) -> None:
+    """Say once why the resident is missing, without touching the host."""
+    if _truthy(os.getenv("SAMANTHA_QUIET")):
+        return
+    try:
+        message = redact(f"{type(error).__name__}: {error}")
+        print(f"[samantha] disabled: {message}", file=sys.__stderr__, flush=True)
+    except Exception:
+        pass
 
 
 def _application_entry() -> str | None:
@@ -94,8 +143,8 @@ def _application_entry() -> str | None:
     return None
 
 
-if os.getenv("SAMANTHA") != "off" and not _invoked_as_cli():
+if _should_arm():
     try:
         arm(_application_entry())
-    except Exception:  # Importing samantha must never break the host.
-        pass
+    except Exception as error:  # Importing samantha must never break the host.
+        _report_disabled(error)

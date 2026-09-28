@@ -59,7 +59,16 @@ observe mode or tests.
 Samantha's cognition and act-planning loops are unbudgeted by default. Optional
 positive limits can be set with `SAMANTHA_ACT_MAX_ROUNDS`,
 `SAMANTHA_MAX_WAKES_PER_HOUR`, `SAMANTHA_TOKEN_BUDGET_PER_DAY`, and
-`SAMANTHA_FLAG_BUDGET`; zero means unlimited for each setting.
+`SAMANTHA_FLAG_BUDGET`; zero means unlimited for each setting. A value that is
+not a number is ignored with a warning and treated as zero.
+
+If Samantha cannot start, the host keeps running and a single
+`[samantha] disabled: <error>` line goes to stderr (suppressed by
+`SAMANTHA_QUIET`).
+
+Worker processes started by `multiprocessing` (spawn or forkserver, including
+PyTorch DataLoader workers) re-import the host's `__main__` but do not arm their
+own resident. Set `SAMANTHA_ARM_CHILDREN=1` to arm one in each worker anyway.
 
 In act mode, application-specific handlers and `expose()` declarations are not
 required. Samantha indexes live project modules, active project frames, globals,
