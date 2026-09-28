@@ -518,7 +518,8 @@ def test_read_call_does_not_complete_an_action_request(
                     "query": None,
                     "value_json": None,
                     "args_json": None,
-                    "kwargs_json": None,
+                    # Each read asks for something new, so every round makes progress.
+                    "kwargs_json": json.dumps({"topic": f"idea {self.calls}"}),
                     "lifetime": "contextual",
                     "reason": "inspect behavior",
                 }
@@ -918,3 +919,64 @@ def test_declared_knobs_are_offered_and_bounds_checked(
     )
     assert not bad.results[0].ok and "outside declared bounds" in bad.results[0].detail
     assert module.retries == 3
+
+
+class RepeatingReadLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def plan_action(self, messages: object) -> dict[str, object]:
+        self.calls += 1
+        return {
+            "intent": "inspect",
+            "reply": "The topic is still general.",
+            "done": False,
+            "lifetime": "contextual",
+            "operations": [
+                {
+                    "op": "inspect",
+                    "effect": "read",
+                    "path": 'module:runtime_demo::config/"topic"',
+                    "query": None,
+                    "value_json": None,
+                    "args_json": None,
+                    "kwargs_json": None,
+                    "lifetime": "contextual",
+                    "reason": "check again",
+                }
+            ],
+        }
+
+
+def test_repeating_unchanged_reads_stops_planning(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    runtime_module(tmp_path, monkeypatch)
+    llm = RepeatingReadLLM()
+    reply = ActController(resident(tmp_path), llm).handle("what is the topic?")
+    assert llm.calls == 2
+    assert reply == "The topic is still general."
+
+
+class ChangingReadLLM(RepeatingReadLLM):
+    """Reads a value the host keeps changing, so every round is new evidence."""
+
+    def __init__(self, module: types.ModuleType) -> None:
+        super().__init__()
+        self.module = module
+
+    def plan_action(self, messages: object) -> dict[str, object]:
+        self.module.config["count"] += 1
+        plan = super().plan_action(messages)
+        plan["operations"][0]["path"] = 'module:runtime_demo::config/"count"'
+        return plan
+
+
+def test_act_planning_rounds_are_capped(tmp_path: Path, monkeypatch: object) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    current = resident(tmp_path)
+    current.config.act_max_rounds = 3
+    llm = ChangingReadLLM(module)
+    reply = ActController(current, llm).handle("watch the count")
+    assert llm.calls == 3
+    assert "limit (3)" in reply

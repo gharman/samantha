@@ -117,7 +117,7 @@ def test_quiet_environment_disables_resident_console_logging(
     assert config.log_level == "OFF"
 
 
-def test_cognition_and_actuation_are_unbudgeted_by_default(
+def test_wakes_are_unbudgeted_and_act_planning_is_capped_by_default(
     tmp_path: Path, monkeypatch: object
 ) -> None:
     for name in (
@@ -130,7 +130,7 @@ def test_cognition_and_actuation_are_unbudgeted_by_default(
         monkeypatch.delenv(name, raising=False)
     config = Config.resolve(_dotenv_start=tmp_path)
     assert config.llm_timeout == 0
-    assert config.act_max_rounds == 0
+    assert config.act_max_rounds == 12
     assert config.max_wakes_per_hour == 0
     assert config.token_budget_per_day == 0
     assert config.flag_budget == 0
@@ -177,10 +177,10 @@ def test_dotenv_numeric_settings_are_parsed_leniently(
         "SAMANTHA_ACT_MAX_ROUNDS=five\nSAMANTHA_LLM_TIMEOUT=45 # seconds\n"
     )
     config = Config.resolve(_dotenv_start=tmp_path)
-    assert config.act_max_rounds == 0
+    assert config.act_max_rounds == 12
     assert config.llm_timeout == 45.0
     assert config.warnings == [
-        "ignoring SAMANTHA_ACT_MAX_ROUNDS='five': expected a number; using 0"
+        "ignoring SAMANTHA_ACT_MAX_ROUNDS='five': expected a number; using 12"
     ]
 
 

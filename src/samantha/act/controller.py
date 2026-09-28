@@ -23,6 +23,7 @@ class ActController:
         if not planner:
             return self._plain_fallback(operator_text)
         transcript: list[dict[str, Any]] = []
+        observed: set[str] = set()
         round_number = 0
         max_rounds = int(getattr(self.resident.config, "act_max_rounds", 0))
         while max_rounds <= 0 or round_number < max_rounds:
@@ -60,6 +61,23 @@ class ActController:
                     str(plan.get("reply") or ""),
                 )
                 return f"{receipt}\n\n{answer}" if answer else receipt
+            # Reads that return new information keep planning; repeating reads whose
+            # results the planner already holds is a loop, not progress.
+            evidence = json.dumps(
+                [
+                    [op.get("op"), op.get("path"), op.get("query"), result.as_dict()]
+                    for op, result in zip(operations, group.results, strict=False)
+                ],
+                sort_keys=True,
+                default=str,
+            )
+            if evidence in observed:
+                return str(
+                    plan.get("reply")
+                    or "I kept re-reading the same live state without finding an "
+                    "action to take, so nothing was changed."
+                )
+            observed.add(evidence)
             round_number += 1
         return (
             f"I reached the configured runtime inspection limit ({max_rounds}) without "
