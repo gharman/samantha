@@ -184,6 +184,7 @@ def _action_plan_format() -> dict[str, Any]:
                     "intercept",
                     "rewrite_output",
                     "emit",
+                    "revert",
                 ],
             },
             "effect": {"type": "string", "enum": ["read", "write"]},

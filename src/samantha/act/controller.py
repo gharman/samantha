@@ -110,10 +110,17 @@ class ActController:
                     "writes through the tapped stream"
                 ),
                 "emit": "write an operator-visible receipt through Samantha's host logger",
+                "revert": (
+                    "undo an active intervention: path is its id from "
+                    "active_interventions, or 'last' for the most recent"
+                ),
             },
             "project_theory": self._project_theory(),
             "source_structure": self._source_structure(),
             "live_paths": inventory,
+            "active_interventions": [
+                group.summary() for group in self.runtime.revertible()
+            ],
             "prior_tool_results": transcript,
             "recent_chat": self._recent_chat(),
             "instructions": (
@@ -246,7 +253,15 @@ class ActController:
         op = str(operation.get("op", ""))
         if op == "call":
             return operation.get("effect") == "write"
-        return op in {"set", "append", "enqueue", "intercept", "rewrite_output", "emit"}
+        return op in {
+            "set",
+            "append",
+            "enqueue",
+            "intercept",
+            "rewrite_output",
+            "emit",
+            "revert",
+        }
 
     def _plain_fallback(self, operator_text: str) -> str:
         messages = [
