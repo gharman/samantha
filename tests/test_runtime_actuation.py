@@ -861,3 +861,34 @@ def test_async_calls_run_on_the_hosts_event_loop(
         loop.call_soon_threadsafe(loop.stop)
         thread.join(5)
         loop.close()
+
+
+def test_interceptors_reach_callers_that_imported_the_function(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    caller_source = tmp_path / "caller.py"
+    caller_source.write_text("from runtime_demo import generate\n")
+    caller = types.ModuleType("runtime_caller")
+    caller.__file__ = str(caller_source)
+    caller.generate = module.generate  # what `from runtime_demo import generate` does
+    monkeypatch.setitem(sys.modules, caller.__name__, caller)
+    original = module.generate
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "make the next topic puppies",
+        [
+            {
+                "op": "intercept",
+                "path": "module:runtime_demo::generate",
+                "kwargs": {"topic": "puppies"},
+                "lifetime": "one_shot",
+            }
+        ],
+        "one_shot",
+    )
+    assert "+1 imported references" in group.results[0].detail
+    stale = caller.generate  # a reference taken while the interceptor was live
+    assert caller.generate("anything") == "puppies"
+    assert caller.generate is original and module.generate is original
+    assert stale("anything") == "anything"
