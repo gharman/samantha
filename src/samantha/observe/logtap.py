@@ -17,7 +17,7 @@ class _Handler(logging.Handler):
         self.emit_line = emit_line
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.name.startswith("samantha"):
+        if record.name.startswith("samantha") or _reaches_tapped_stream(record):
             return
         try:
             self.emit_line("log", self.format(record))
@@ -25,15 +25,62 @@ class _Handler(logging.Handler):
             self.handleError(record)
 
 
+def _reaches_tapped_stream(record: logging.LogRecord) -> bool:
+    """True when a host handler will write this record through a tapped stream.
+
+    The tapped stream observes that output already; observing the record here too
+    doubled every logged metric point.
+    """
+    logger: logging.Logger | None = logging.getLogger(record.name)
+    found = False
+    while logger:
+        for handler in logger.handlers:
+            found = True
+            if (
+                isinstance(handler, logging.StreamHandler)
+                and isinstance(getattr(handler, "stream", None), Tee)
+                and record.levelno >= handler.level
+            ):
+                return True
+        logger = logger.parent if logger.propagate else None
+    last_resort = logging.lastResort
+    # With no handlers at all, logging's last resort writes to the current stderr.
+    return (
+        not found
+        and last_resort is not None
+        and record.levelno >= last_resort.level
+        and isinstance(sys.stderr, Tee)
+    )
+
+
 class LogTap:
+    """Observe every handled log record without registering a root handler.
+
+    A root handler made ``logging.basicConfig()`` a silent no-op for hosts that
+    configure logging after ``import samantha``, so their console logs vanished.
+    """
+
     def __init__(self, emit_line: Callable[[str, str], None]) -> None:
         self.handler = _Handler(emit_line)
+        self._original: Any = None
 
     def start(self) -> None:
-        logging.getLogger().addHandler(self.handler)
+        if self._original is not None:
+            return
+        original = logging.Logger.callHandlers
+        handler = self.handler
+
+        def call_handlers(logger: logging.Logger, record: logging.LogRecord) -> None:
+            original(logger, record)
+            handler.handle(record)
+
+        self._original = original
+        logging.Logger.callHandlers = call_handlers  # type: ignore[method-assign]
 
     def stop(self) -> None:
-        logging.getLogger().removeHandler(self.handler)
+        if self._original is not None:
+            logging.Logger.callHandlers = self._original  # type: ignore[method-assign]
+            self._original = None
 
 
 class Tee:
