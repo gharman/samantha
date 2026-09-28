@@ -17,9 +17,7 @@ class ScriptedLLM:
     def __init__(self, delay: float) -> None:
         self.delay = delay
         path = os.getenv("TESTBED_PLANS")
-        self.plans: list[dict[str, Any]] = (
-            json.loads(open(path).read()) if path else []
-        )
+        self.plans: list[dict[str, Any]] = json.loads(open(path).read()) if path else []
 
     def complete(
         self, messages: list[dict[str, str]], signature: str = "default"

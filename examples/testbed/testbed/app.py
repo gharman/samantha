@@ -1,8 +1,9 @@
 """Multi-head trainer testbed that exercises Samantha's observation and act surfaces.
 
 It prints metric lines (including a constant one that trips the stall sentinel),
-can emit a WARNING on demand, keeps live state in a dict, a dataclass, and a worker
-queue, and reports how long its own prints took so host-thread stalls are visible.
+can emit a WARNING on demand, keeps live state in a dict, a dataclass, a worker
+queue, and a trainer object with methods, and reports how long its own prints took
+so host-thread stalls are visible.
 """
 
 import samantha  # noqa: F401 - arming the resident is the behavior under test
@@ -32,6 +33,31 @@ cfg["sampling_weights"]["head_1"] = 0.25
 ceilings = [0.94, 0.91, 0.95]
 jobs: queue.Queue[str] = queue.Queue()
 completed: list[str] = []
+
+
+class Trainer:
+    """Run control an operator would reach for: inspect, reweight, pause."""
+
+    def __init__(self) -> None:
+        self.paused = False
+
+    def status(self) -> str:
+        weights = ", ".join(f"{k}={v}" for k, v in cfg["sampling_weights"].items())
+        state = "paused" if self.paused else "running"
+        return f"{state} · phase={settings.phase_label} · lr={settings.lr} · {weights}"
+
+    def boost(self, head: str, weight: float) -> str:
+        cfg["sampling_weights"][head] = float(weight)
+        return f"{head} sampling weight set to {weight}"
+
+    def pause(self) -> None:
+        self.paused = True
+
+    def resume(self) -> None:
+        self.paused = False
+
+
+trainer = Trainer()
 log = logging.getLogger("testbed")
 slowest_print = 0.0
 
@@ -94,6 +120,9 @@ def main(argv: list[str] | None = None) -> int:
     step = 0
     try:
         while args.steps <= 0 or step < args.steps:
+            if trainer.paused:
+                time.sleep(args.interval)
+                continue
             train_step(step, scores)
             if step == args.warn_at:
                 emit(f"WARNING novel queue fault at step={step}")

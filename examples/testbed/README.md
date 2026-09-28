@@ -5,7 +5,9 @@ its own `pyproject.toml`, so Samantha treats this directory as the project root.
 
 It prints per-head metric lines plus a constant `gpu/util` series (which trips the
 stall sentinel), can emit a WARNING on demand, and keeps live state for act mode
-to find: the `cfg` dict, the `settings` dataclass, and the `jobs` worker queue.
+to find: the `cfg` dict, the `settings` dataclass, the `jobs` worker queue, and a
+`trainer` object whose methods (`status`, `boost`, `pause`, `resume`) exercise method
+calls and interception.
 On exit it reports the slowest `print()`, which exposes host-thread stalls.
 
 ```console

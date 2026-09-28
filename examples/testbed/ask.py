@@ -1,7 +1,7 @@
 """Send scripted chat messages to a running resident without the interactive CLI.
 
-    python ask.py "what is this program?" "and the loss?"
-    python ask.py --hangup "slow question"   # disconnect before the reply arrives
+python ask.py "what is this program?" "and the loss?"
+python ask.py --hangup "slow question"   # disconnect before the reply arrives
 """
 
 import os
@@ -38,11 +38,17 @@ def main() -> int:
         hello = json.loads(incoming.readline())
         print(f"hello: pid={hello.get('pid')} mode={hello.get('mode')}")
         for text in args.messages:
-            client.sendall((json.dumps({"type": "command", "text": text}) + "\n").encode())
+            client.sendall(
+                (json.dumps({"type": "command", "text": text}) + "\n").encode()
+            )
             if args.hangup:
                 print(f"> {text}\n(hung up before reply)")
                 return 0
-            reply = json.loads(incoming.readline())
+            raw = incoming.readline()
+            if not raw:
+                print(f"> {text}\n(connection closed without a reply)")
+                return 1
+            reply = json.loads(raw)
             print(f"> {text}\n{reply.get('reply') or reply.get('error')}")
     return 0
 
