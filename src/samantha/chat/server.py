@@ -132,11 +132,14 @@ class ChatServer:
                 "reply": reply,
                 "notices": drain() if drain else [],
             }
-        return {
-            "ok": True,
-            "mode": self.resident.config.mode,
-            "reply": "Cognition is dormant; configure OPENAI_API_KEY in .env.",
-        }
+        if self.resident.config.mode in {"observe", "off"}:
+            reply = (
+                f"Samantha is in {self.resident.config.mode} mode, which has no "
+                "conversation; set SAMANTHA=advise (or act) and restart the host."
+            )
+        else:
+            reply = "Cognition is dormant; configure OPENAI_API_KEY in .env."
+        return {"ok": True, "mode": self.resident.config.mode, "reply": reply}
 
     def stop(self) -> None:
         self.running = False
