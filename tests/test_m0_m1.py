@@ -247,3 +247,32 @@ def test_metric_extraction_is_linear_on_long_tokens() -> None:
     found = metrics.ingest("payload=" + "x" * 20_000 + ", loss=0.5")
     assert time.perf_counter() - started < 0.1  # quadratic backtracking took ~24 s
     assert found == [{"series": "loss", "value": 0.5}]
+
+
+def test_host_basic_config_works_and_logged_metrics_are_observed_once(
+    tmp_path: Path,
+) -> None:
+    import logging
+
+    from samantha.observe import Observer
+
+    observer = Observer(Journal(tmp_path, "run"))
+    root = logging.getLogger()
+    saved = (root.level, list(root.handlers))
+    for handler in saved[1]:
+        root.removeHandler(handler)
+    observer.start()
+    try:
+        # A host that configures logging after `import samantha`.
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        assert root.handlers, "basicConfig must still install the host's handler"
+        logging.getLogger("host").info("loss=0.5")
+        logging.getLogger("host").debug("loss=0.7")  # below the configured level
+    finally:
+        observer.stop()
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+        root.setLevel(saved[0])
+        for handler in saved[1]:
+            root.addHandler(handler)
+    assert list(observer.metrics.series["loss"]) == [0.5]
