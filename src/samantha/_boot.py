@@ -5,6 +5,8 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,29 +37,34 @@ class Config:
     @classmethod
     def resolve(cls, **overrides: object) -> "Config":
         dotenv_start = overrides.pop("_dotenv_start", None)
-        dotenv_file = _load_dotenv(dotenv_start)
+        dotenv_file, dotenv_values = _load_dotenv(dotenv_start)
         warnings: list[str] = []
+
+        def env(key: str, default: str | None = None) -> str | None:
+            if key in os.environ:
+                return os.environ[key]
+            return dotenv_values.get(key, default)
+
+        def number(key: str, cast: type[int] | type[float]) -> int | float:
+            return _env_number(key, cast, warnings, env)
+
         values = dict(
-            mode=os.getenv("SAMANTHA", "advise"),
-            goal=os.getenv("SAMANTHA_GOAL"),
-            model=os.getenv("SAMANTHA_MODEL", "gpt-5.6-terra"),
-            base_url=os.getenv("SAMANTHA_BASE_URL", "https://api.openai.com"),
-            api_key=os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
-            state_dir=os.getenv("SAMANTHA_STATE_DIR"),
-            max_wakes_per_hour=_env_number(
-                "SAMANTHA_MAX_WAKES_PER_HOUR", int, warnings
-            ),
-            token_budget_per_day=_env_number(
-                "SAMANTHA_TOKEN_BUDGET_PER_DAY", int, warnings
-            ),
-            flag_budget=_env_number("SAMANTHA_FLAG_BUDGET", int, warnings),
+            mode=env("SAMANTHA", "advise"),
+            goal=env("SAMANTHA_GOAL"),
+            model=env("SAMANTHA_MODEL", "gpt-5.6-terra"),
+            base_url=env("SAMANTHA_BASE_URL", "https://api.openai.com"),
+            api_key=env("OPENAI_API_KEY"),
+            state_dir=env("SAMANTHA_STATE_DIR"),
+            max_wakes_per_hour=number("SAMANTHA_MAX_WAKES_PER_HOUR", int),
+            token_budget_per_day=number("SAMANTHA_TOKEN_BUDGET_PER_DAY", int),
+            flag_budget=number("SAMANTHA_FLAG_BUDGET", int),
             dotenv_file=str(dotenv_file) if dotenv_file else None,
-            llm_timeout=_env_number("SAMANTHA_LLM_TIMEOUT", float, warnings),
-            act_max_rounds=_env_number("SAMANTHA_ACT_MAX_ROUNDS", int, warnings),
+            llm_timeout=number("SAMANTHA_LLM_TIMEOUT", float),
+            act_max_rounds=number("SAMANTHA_ACT_MAX_ROUNDS", int),
             log_level=(
                 "OFF"
-                if _truthy(os.getenv("SAMANTHA_QUIET"))
-                else os.getenv("SAMANTHA_LOG_LEVEL", "INFO").upper()
+                if _truthy(env("SAMANTHA_QUIET"))
+                else env("SAMANTHA_LOG_LEVEL", "INFO").upper()
             ),
             warnings=warnings,
         )
@@ -68,10 +75,13 @@ class Config:
 
 
 def _env_number(
-    name: str, cast: type[int] | type[float], warnings: list[str]
+    name: str,
+    cast: type[int] | type[float],
+    warnings: list[str],
+    lookup: Callable[[str], str | None] = os.getenv,
 ) -> int | float:
     """Read a numeric setting; a malformed value falls back to 0 (unlimited)."""
-    raw = os.getenv(name, "").strip()
+    raw = (lookup(name) or "").strip()
     if not raw:
         return cast(0)
     try:
@@ -81,21 +91,40 @@ def _env_number(
         return cast(0)
 
 
-def _load_dotenv(start: Path | None = None) -> Path | None:
-    """Load the nearest .env without adding a runtime dependency."""
+def _dotenv_key_allowed(key: str) -> bool:
+    """Only Samantha's own settings and the OpenAI key may come from .env."""
+    return key == "OPENAI_API_KEY" or key.startswith("SAMANTHA")
+
+
+_INLINE_COMMENT = re.compile(r"\s+#")
+
+
+def _dotenv_value(raw: str) -> str:
+    value = raw.strip()
+    if value and value[0] in "'\"":
+        quote = value[0]
+        end = value.find(quote, 1)
+        return value[1:end] if end != -1 else value[1:]
+    return _INLINE_COMMENT.split(value, maxsplit=1)[0].strip()
+
+
+def _load_dotenv(start: Path | None = None) -> tuple[Path | None, dict[str, str]]:
+    """Parse the project's own .env without touching the host environment."""
     origin = (start or Path.cwd()).resolve()
-    for directory in (origin, *origin.parents):
-        path = directory / ".env"
-        if not path.is_file():
+    path = origin / ".env"
+    if not path.is_file():
+        return None, {}
+    values: dict[str, str] = {}
+    for raw in path.read_text(errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
             continue
-        for raw in path.read_text(errors="replace").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.removeprefix("export ").split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-        return path
-    return None
+        key, _, raw_value = line.removeprefix("export ").partition("=")
+        key = key.strip()
+        if not _dotenv_key_allowed(key):
+            continue
+        values[key] = _dotenv_value(raw_value)
+    return path, values
 
 
 @dataclass
