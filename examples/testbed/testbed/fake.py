@@ -23,7 +23,21 @@ class ScriptedLLM:
         self, messages: list[dict[str, str]], signature: str = "default"
     ) -> dict[str, Any]:
         time.sleep(self.delay)
-        return {"assessment": "fake", "actions": []}
+        if signature == "cold_start":
+            return {"assessment": "fake", "actions": []}
+        # Sentinel wakes: raise one flag so operator-visible findings can be tested.
+        sentinel = signature.removeprefix("wake:")
+        return {
+            "assessment": f"(fake model) assessed {sentinel}",
+            "actions": [
+                {
+                    "type": "flag",
+                    "summary": f"(fake model) {sentinel} sentinel fired",
+                    "evidence": "scripted",
+                    "prediction": "",
+                }
+            ],
+        }
 
     def chat(self, messages: list[dict[str, str]]) -> str:
         time.sleep(self.delay)
