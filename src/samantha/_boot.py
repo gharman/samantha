@@ -5,7 +5,7 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .identity import discover_project
@@ -30,11 +30,13 @@ class Config:
     llm_timeout: float = 0.0
     act_max_rounds: int = 0
     log_level: str = "INFO"
+    warnings: list[str] = field(default_factory=list)
 
     @classmethod
     def resolve(cls, **overrides: object) -> "Config":
         dotenv_start = overrides.pop("_dotenv_start", None)
         dotenv_file = _load_dotenv(dotenv_start)
+        warnings: list[str] = []
         values = dict(
             mode=os.getenv("SAMANTHA", "advise"),
             goal=os.getenv("SAMANTHA_GOAL"),
@@ -42,22 +44,41 @@ class Config:
             base_url=os.getenv("SAMANTHA_BASE_URL", "https://api.openai.com"),
             api_key=os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
             state_dir=os.getenv("SAMANTHA_STATE_DIR"),
-            max_wakes_per_hour=int(os.getenv("SAMANTHA_MAX_WAKES_PER_HOUR", "0")),
-            token_budget_per_day=int(os.getenv("SAMANTHA_TOKEN_BUDGET_PER_DAY", "0")),
-            flag_budget=int(os.getenv("SAMANTHA_FLAG_BUDGET", "0")),
+            max_wakes_per_hour=_env_number(
+                "SAMANTHA_MAX_WAKES_PER_HOUR", int, warnings
+            ),
+            token_budget_per_day=_env_number(
+                "SAMANTHA_TOKEN_BUDGET_PER_DAY", int, warnings
+            ),
+            flag_budget=_env_number("SAMANTHA_FLAG_BUDGET", int, warnings),
             dotenv_file=str(dotenv_file) if dotenv_file else None,
-            llm_timeout=float(os.getenv("SAMANTHA_LLM_TIMEOUT", "0")),
-            act_max_rounds=int(os.getenv("SAMANTHA_ACT_MAX_ROUNDS", "0")),
+            llm_timeout=_env_number("SAMANTHA_LLM_TIMEOUT", float, warnings),
+            act_max_rounds=_env_number("SAMANTHA_ACT_MAX_ROUNDS", int, warnings),
             log_level=(
                 "OFF"
                 if _truthy(os.getenv("SAMANTHA_QUIET"))
                 else os.getenv("SAMANTHA_LOG_LEVEL", "INFO").upper()
             ),
+            warnings=warnings,
         )
         values.update({k: v for k, v in overrides.items() if v is not None})
         if values["mode"] not in {"off", "observe", "advise", "act"}:
             values["mode"] = "advise"
         return cls(**values)
+
+
+def _env_number(
+    name: str, cast: type[int] | type[float], warnings: list[str]
+) -> int | float:
+    """Read a numeric setting; a malformed value falls back to 0 (unlimited)."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return cast(0)
+    try:
+        return cast(raw)
+    except ValueError:
+        warnings.append(f"ignoring {name}={raw!r}: expected a number; using 0")
+        return cast(0)
 
 
 def _load_dotenv(start: Path | None = None) -> Path | None:
@@ -118,6 +139,8 @@ def arm(
     if _resident:
         return _resident
     _logging(config)
+    for warning in config.warnings:
+        LOG.warning(warning)
     state = state_root(key, config.state_dir)
     journal = Journal(state)
     _resident = Resident(config, root, key, journal, state)
