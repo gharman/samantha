@@ -275,8 +275,44 @@ def test_sentinel_wakes_never_block_the_observed_thread(tmp_path: Path) -> None:
     release.set()
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        rows = [json.loads(line) for line in resident.journal.path.read_text().splitlines()]
+        rows = [
+            json.loads(line) for line in resident.journal.path.read_text().splitlines()
+        ]
         if any(row["type"] == "wake" for row in rows):
             break
         time.sleep(0.02)
-    assert any(row["type"] == "wake" and row["sentinel"] == "log-novelty" for row in rows)
+    assert any(
+        row["type"] == "wake" and row["sentinel"] == "log-novelty" for row in rows
+    )
+
+
+def test_goals_reach_chat_and_act_contexts_and_questions_are_not_hijacked(
+    tmp_path: Path,
+) -> None:
+    from samantha.act.controller import ActController
+    from samantha.chat.server import ChatServer
+
+    resident = fake_resident(tmp_path, mode="advise")
+    resident.key = "project"
+    seen: list[str] = []
+
+    class RecordingLLM:
+        def chat(self, messages: list[dict[str, str]]) -> str:
+            seen.append(messages[0]["content"])
+            return "answered"
+
+        def plan_action(self, messages: list[dict[str, str]]) -> dict[str, object]:
+            seen.append(messages[0]["content"])
+            return {"reply": "noted", "operations": []}
+
+    resident.cognition = Cognition(resident, RecordingLLM())
+    server = ChatServer(resident, tmp_path / "run")
+    reply = server._handle({"type": "command", "text": "goal of this app?"})
+    assert reply["reply"] == "answered" and resident.config.goal is None
+    reply = server._handle({"type": "command", "text": "/goal every head at ceiling"})
+    assert resident.config.goal == "every head at ceiling"
+    server._handle({"type": "command", "text": "how close are we?"})
+    assert '"current_goal": "every head at ceiling"' in seen[-1]
+    resident.ledger = Ledger(tmp_path / "ledger.json")
+    ActController(resident, RecordingLLM()).handle("push toward it")
+    assert '"current_goal": "every head at ceiling"' in seen[-1]

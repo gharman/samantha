@@ -103,8 +103,10 @@ therefore include the result and answer the operator’s original question rathe
 than merely promising a later retrieval. Act planning also includes recent chat
 history so follow-ups retain their subject.
 
-Operator intent can be supplied by `SAMANTHA_GOAL`, `samantha.goal()`, chat, or
-read-only source comments:
+Operator intent can be supplied by `SAMANTHA_GOAL`, `samantha.goal()`, `/goal <text>`
+in chat (`/goal` alone shows the current goal), or read-only source comments. The
+current goal and any standing goals in `goals.md` are included in chat, act planning,
+and sentinel wakes:
 
 ```python
 # daemon: goal — all heads within 0.5pt of fidelity ceiling by end of run
