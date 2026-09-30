@@ -731,6 +731,91 @@ def test_natural_language_queries_rank_relevant_live_paths_first(
     assert found and all("sampling_weights" in path for path in found)
 
 
+def cafe_module(tmp_path: Path, monkeypatch: object) -> types.ModuleType:
+    from dataclasses import dataclass, field
+
+    module = runtime_module(tmp_path, monkeypatch)
+
+    @dataclass
+    class EspressoMachine:
+        pressure_bar: float = 4.0
+
+    @dataclass
+    class Cafe:
+        machine: EspressoMachine = field(default_factory=EspressoMachine)
+
+        def announce(self, message: str) -> str:
+            return f"{message} at {self.machine.pressure_bar} bar"
+
+    for cls in (EspressoMachine, Cafe):
+        cls.__module__ = module.__name__
+        setattr(module, cls.__name__, cls)
+    module.cafe = Cafe()
+    return module
+
+
+def test_class_attribute_shadowed_by_instances_is_not_reported_verified(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = cafe_module(tmp_path, monkeypatch)
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "raise the pressure",
+        [
+            {
+                "op": "set",
+                "path": "module:runtime_demo::EspressoMachine/pressure_bar",
+                "value": 9.0,
+            }
+        ],
+    )
+    result = group.results[0]
+    assert result.ok and not result.verified
+    assert "shadowed by 1 live instance" in result.detail
+    assert "module:runtime_demo::cafe/machine/pressure_bar" in result.detail
+    assert module.cafe.machine.pressure_bar == 4.0
+    # The class change is still recorded so it can be undone.
+    assert operator.revert(group.id)
+    assert module.EspressoMachine.pressure_bar == 4.0
+
+
+def test_unshadowed_class_attribute_set_is_still_verified(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    module.Worker.retries = 2
+    worker = module.Worker()
+    operator = RuntimeOperator(resident(tmp_path))
+    group = operator.execute(
+        "retry more",
+        [{"op": "set", "path": "module:runtime_demo::Worker/retries", "value": 5}],
+    )
+    assert group.results[0].verified, group.results[0].detail
+    assert worker.retries == 5
+
+
+def test_instance_paths_rank_above_the_class_attributes_they_shadow(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    cafe_module(tmp_path, monkeypatch)
+    graph = RuntimeGraph(tmp_path).refresh()
+    paths = [item["path"] for item in graph.snapshot("espresso machine pressure")]
+    instance = "module:runtime_demo::cafe/machine/pressure_bar"
+    default = "module:runtime_demo::EspressoMachine/pressure_bar"
+    assert paths.index(instance) < paths.index(default)
+    described = graph.describe(default)
+    assert described["scope"] == "class"
+    assert described["shadowed_by"] == [instance]
+    assert "scope" not in graph.describe(instance)
+
+    paths = [item["path"] for item in graph.snapshot("cafe announce")]
+    bound = "module:runtime_demo::cafe/announce"
+    assert paths.index(bound) < paths.index("module:runtime_demo::Cafe/announce")
+    assert graph.describe("module:runtime_demo::Cafe/announce")["shadowed_by"] == [
+        bound
+    ]
+
+
 def plan(*operations: dict[str, object]) -> dict[str, object]:
     return {
         "intent": "act",

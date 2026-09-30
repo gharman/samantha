@@ -55,11 +55,15 @@ class RuntimeGraph:
         self.nodes: dict[str, LiveNode] = {}
         self._seen: dict[int, str] = {}
         self._aliases: dict[str, str] = {}
+        # (id(class), attribute) -> instance-level paths the program reads in place
+        # of that class attribute: instance __dict__ entries and bound methods.
+        self._instance_paths: dict[tuple[int, str], list[str]] = {}
 
     def refresh(self) -> "RuntimeGraph":
         self.nodes.clear()
         self._seen.clear()
         self._aliases.clear()
+        self._instance_paths.clear()
         # Active function frames contain the objects that can affect what the program is
         # doing now; index them first so bounded planner views retain them. Modules come
         # before loose instances so shared objects are expanded under durable paths.
@@ -67,6 +71,7 @@ class RuntimeGraph:
         self._frames()
         self._modules()
         self._objects()
+        self._index_instance_paths()
         return self
 
     def _exposures(self) -> None:
@@ -93,11 +98,22 @@ class RuntimeGraph:
         words = _query_words(query)
         if not words:
             return [] if only_matches else items[:limit]
-        scored = [(_relevance(item, words), index) for index, item in enumerate(items)]
+        scores = {item["path"]: _relevance(item, words) for item in items}
+        # A class name often matches the query better than the instance attribute
+        # path does, but the program reads the instance. Rank each instance path at
+        # least as high as the class attribute it stands in for, and ahead of it.
+        for item in items:
+            for path in self.instance_paths(item["path"]):
+                if path in scores:
+                    scores[path] = max(scores[path], scores[item["path"]])
+        scored = [
+            (scores[item["path"]], item.get("scope") == "class", index)
+            for index, item in enumerate(items)
+        ]
         if only_matches:
             scored = [row for row in scored if row[0] > 0]
-        scored.sort(key=lambda row: (-row[0], row[1]))
-        return [items[index] for _, index in scored[:limit]]
+        scored.sort(key=lambda row: (-row[0], row[1], row[2]))
+        return [items[index] for *_, index in scored[:limit]]
 
     def describe(self, node: LiveNode | str) -> dict[str, Any]:
         current = self.nodes[node] if isinstance(node, str) else node
@@ -119,7 +135,33 @@ class RuntimeGraph:
                 result["signature"] = "unknown"
         if alias := self._aliases.get(current.path):
             result["same_object_as"] = alias
+        if _class_attribute(current):
+            result["scope"] = "class"
+            if shadowed := self.instance_paths(current):
+                result["shadowed_by"] = shadowed[:3]
         return result
+
+    def instance_paths(self, node: LiveNode | str) -> list[str]:
+        """Instance-level paths live objects read instead of a class attribute."""
+        current = self.nodes.get(node) if isinstance(node, str) else node
+        if current is None or not _class_attribute(current):
+            return []
+        return self._instance_paths.get((id(current.parent), current.key), [])
+
+    def shadowing_instances(self, node: LiveNode) -> list[Any]:
+        """Live instances whose own ``__dict__`` hides this class attribute.
+
+        Scans the heap rather than the graph so instances past the node budget
+        still count.
+        """
+        if not _class_attribute(node):
+            return []
+        cls, name = node.parent, node.key
+        return [
+            value
+            for value in gc.get_objects()
+            if issubclass(type(value), cls) and name in _safe_vars(value)
+        ]
 
     def get(self, path: str) -> LiveNode:
         if path in self.nodes:
@@ -132,6 +174,18 @@ class RuntimeGraph:
                 if resolved in self.nodes:
                     return self.nodes[resolved]
         raise KeyError(f"live path not found: {path}")
+
+    def _index_instance_paths(self) -> None:
+        for path, node in self.nodes.items():
+            if node.access != "attr" or not isinstance(node.key, str):
+                continue
+            if isinstance(node.parent, (type, types.ModuleType)):
+                continue
+            for cls in type(node.parent).__mro__:
+                if cls is not object and node.key in cls.__dict__:
+                    self._instance_paths.setdefault((id(cls), node.key), []).append(
+                        path
+                    )
 
     def _modules(self) -> None:
         for name, module in list(sys.modules.items()):
@@ -271,6 +325,10 @@ class RuntimeGraph:
         return (
             path.is_file() and self.root in path.parents and ".venv" not in path.parts
         )
+
+
+def _class_attribute(node: LiveNode) -> bool:
+    return node.access == "attr" and isinstance(node.parent, type)
 
 
 def _public_methods(cls: type, is_project: Any) -> list[str]:

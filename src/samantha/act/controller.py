@@ -105,7 +105,11 @@ class ActController:
             "operation_semantics": {
                 "search": "query live paths; read-only",
                 "inspect": "inspect one exact live path; read-only",
-                "set": "assign JSON value to exact attribute/item path",
+                "set": (
+                    "assign JSON value to exact attribute/item path. A path with scope "
+                    "'class' is a class attribute; when it lists shadowed_by, live "
+                    "instances read those paths instead, so set or call them"
+                ),
                 "append": "append JSON value to an existing collection",
                 "enqueue": "put or append JSON value into an existing queue",
                 "call": (

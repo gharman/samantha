@@ -275,6 +275,20 @@ class RuntimeOperator:
             verified = node.read() == value
             if verified:
                 group.undo.append((node, old))
+            if verified and (shadowing := self.graph.shadowing_instances(node)):
+                # The class attribute changed, but these instances carry their own
+                # value and never read it; reporting "verified" would be false.
+                example = next(iter(self.graph.instance_paths(node)), None)
+                hint = f" (e.g. {example})" if example else ""
+                return OperationResult(
+                    op,
+                    path,
+                    True,
+                    f"class attribute changed but shadowed by {len(shadowing)} live "
+                    f"instance(s); set the instance path instead{hint}",
+                    False,
+                    node.read(),
+                )
             return OperationResult(
                 op,
                 path,
