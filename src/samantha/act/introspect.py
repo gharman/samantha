@@ -9,6 +9,7 @@ import re
 import sys
 import types
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -198,7 +199,7 @@ class RuntimeGraph:
                     continue
                 path = f"module:{name}::{attr}"
                 node = LiveNode(path, value, module, attr, "attr", True)
-                self._add(node, 0)
+                self._add_safely(node)
 
     def _frames(self) -> None:
         for thread_id, frame in sys._current_frames().items():
@@ -216,7 +217,15 @@ class RuntimeGraph:
                     for name, value in list(frame.f_locals.items()):
                         # CPython fast locals are not safely assignable, but their child
                         # objects remain fully introspectable and mutable.
-                        self._add(LiveNode(f"{prefix}::{name}", value), 0)
+                        self._add_safely(LiveNode(f"{prefix}::{name}", value))
+
+    def _add_safely(self, node: LiveNode) -> None:
+        # Host objects can break normal protocols (pygame's ScancodeWrapper is a
+        # tuple that rejects slices); one such root must not fail the chat turn.
+        try:
+            self._add(node, 0)
+        except Exception:
+            pass
 
     def _objects(self) -> None:
         """Find project instances even when their coroutine frames are suspended."""
@@ -275,7 +284,7 @@ class RuntimeGraph:
                 path = f"{node.path}/{json.dumps(key, ensure_ascii=False)}"
                 self._add(LiveNode(path, child, value, key, "item", True), depth + 1)
         elif isinstance(value, (list, tuple)):
-            for index, child in enumerate(value[:100]):
+            for index, child in enumerate(islice(value, 100)):
                 path = f"{node.path}/[{index}]"
                 mutable = isinstance(value, list)
                 self._add(

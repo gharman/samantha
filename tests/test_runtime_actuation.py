@@ -110,6 +110,30 @@ def test_suspended_project_instances_are_discoverable(
     assert worker.topic == "general"
 
 
+class IntIndexTuple(tuple):
+    """Like pygame.key.ScancodeWrapper: a tuple that accepts only int indexes."""
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            raise TypeError("'slice' object cannot be interpreted as an integer")
+        return super().__getitem__(index)
+
+
+def test_tuple_that_rejects_slices_does_not_break_refresh(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    module.keystate = IntIndexTuple((0, 1, 0))
+    graph = RuntimeGraph(tmp_path).refresh()
+    assert graph.get("module:runtime_demo::keystate/[1]").read() == 1
+
+
+def test_json_safe_accepts_tuple_that_rejects_slices() -> None:
+    from samantha.act.runtime import _json_safe
+
+    assert _json_safe(IntIndexTuple((0, 1))) == [0, 1]
+
+
 def resident(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
         root=tmp_path,
