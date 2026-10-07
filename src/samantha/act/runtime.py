@@ -14,6 +14,7 @@ import time
 import types
 import uuid
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Any
 
 from .introspect import LiveNode, RuntimeGraph, _preview
@@ -594,7 +595,7 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _json_safe(item) for key, item in list(value.items())[:100]}
     if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value[:100]]
+        return [_json_safe(item) for item in islice(value, 100)]
     return _preview(value)
 
 
