@@ -320,10 +320,25 @@ Analyzed {len(inventory.get("files", {}))} project files.
             "apply it now. Otherwise change nothing and say why."
         )
         self.resident.journal.write("chat", direction="auto", text=request)
+        # An act turn can take up to SAMANTHA_ACT_MAX_ROUNDS model calls; running it
+        # here would hold up the wakes queued behind this one.
+        threading.Thread(
+            target=self._autonomous_turn,
+            args=(actuator, request),
+            name="samantha-autonomy",
+            daemon=True,
+        ).start()
+
+    def _autonomous_turn(self, actuator: Any, request: str) -> None:
         try:
             reply = actuator.handle(request)
         except Exception as exc:
             logging.getLogger("samantha").warning("autonomous act turn failed: %s", exc)
+            # The auto request row gets a reply either way, and the operator hears.
+            self.resident.journal.write(
+                "chat", direction="out", text=f"Autonomous act turn failed: {exc}"
+            )
+            self.notices.append(f"act failed: {exc}")
             return
         self.resident.journal.write("chat", direction="out", text=reply)
         self._notify("acted", {"summary": reply.split("\n\n")[0]})

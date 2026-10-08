@@ -1,6 +1,7 @@
 import json
 import sys
 import threading
+import time
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -91,6 +92,13 @@ def gap_event() -> WakeEvent:
     return events[0]
 
 
+def settle() -> None:
+    """Wait for autonomous act turns, which run on their own threads."""
+    for thread in threading.enumerate():
+        if thread.name == "samantha-autonomy":
+            thread.join(5)
+
+
 def journal_rows(current: SimpleNamespace) -> list[dict]:
     return [json.loads(line) for line in current.journal.path.read_text().splitlines()]
 
@@ -101,6 +109,7 @@ def test_gap_wake_acts_with_goal_autonomy_and_is_revertible(
     module = speed_module(tmp_path, monkeypatch)
     current, llm = resident(tmp_path)
     current.cognition.wake(gap_event())
+    settle()
     assert module.SPEED == 3
     assert llm.plans == 1
     rows = journal_rows(current)
@@ -120,6 +129,7 @@ def test_gap_wake_does_not_act_without_the_setting(
     module = speed_module(tmp_path, monkeypatch)
     current, llm = resident(tmp_path, autonomy="off")
     current.cognition.wake(gap_event())
+    settle()
     assert module.SPEED == 1
     assert llm.plans == 0
     assert any(r["type"] == "flag" for r in journal_rows(current))
@@ -131,6 +141,7 @@ def test_gap_wake_does_not_act_in_advise_mode(
     module = speed_module(tmp_path, monkeypatch)
     current, llm = resident(tmp_path, mode="advise")
     current.cognition.wake(gap_event())
+    settle()
     assert module.SPEED == 1
     assert llm.plans == 0
 
@@ -139,6 +150,7 @@ def test_other_sentinels_do_not_act(tmp_path: Path, monkeypatch: object) -> None
     module = speed_module(tmp_path, monkeypatch)
     current, llm = resident(tmp_path)
     current.cognition.wake(WakeEvent("stall", {"series": "goal.met"}))
+    settle()
     assert module.SPEED == 1
     assert llm.plans == 0
 
@@ -150,10 +162,53 @@ def test_one_autonomous_turn_per_series_per_dwell(
     current, llm = resident(tmp_path)
     current.cognition.wake(gap_event())
     current.cognition.wake(gap_event())
+    settle()
     assert llm.plans == 1
     other = WakeEvent("gap", {"series": "score", "value": 0.0, "reference": 1.0})
     current.cognition.wake(other)
+    settle()
     assert llm.plans == 2
+
+
+def test_failed_autonomous_turn_is_journaled_and_reported(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    speed_module(tmp_path, monkeypatch)
+    current, _ = resident(tmp_path)
+
+    def broken(request: str) -> str:
+        raise RuntimeError("graph unavailable")
+
+    current.actuator.handle = broken
+    current.cognition.wake(gap_event())
+    settle()
+    rows = [r for r in journal_rows(current) if r["type"] == "chat"]
+    assert [r["direction"] for r in rows] == ["auto", "out"]
+    assert "graph unavailable" in rows[1]["text"]
+    assert "act failed: graph unavailable" in current.cognition.notices
+
+
+def test_wake_does_not_wait_for_the_autonomous_turn(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    speed_module(tmp_path, monkeypatch)
+    current, _ = resident(tmp_path)
+    release = threading.Event()
+
+    def slow(request: str) -> str:
+        release.wait(5)
+        return "nothing to change"
+
+    current.actuator.handle = slow
+    started = time.monotonic()
+    assert current.cognition.wake(gap_event()) is not None
+    assert time.monotonic() - started < 1
+    release.set()
+    settle()
+    assert any(
+        r["type"] == "chat" and r["text"] == "nothing to change"
+        for r in journal_rows(current)
+    )
 
 
 def test_chat_and_autonomous_turns_are_serialized(tmp_path: Path) -> None:

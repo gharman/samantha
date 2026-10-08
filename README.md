@@ -70,7 +70,9 @@ sentinel finds an aspiration gap (a series below its declared target), Samantha
 also runs one act-planning turn for it, at most once per series every 10 minutes.
 That turn is bounded by the operator goal and the `# daemon:` directives like any
 chat turn, and its changes are journaled and revertible the same way. The journal
-records the request as a `chat` row with `direction` `auto`. Chat turns and
+records the request as a `chat` row with `direction` `auto`, followed by the reply
+or the failure, and the outcome reaches the operator's next chat reply. The turn
+runs on its own thread, so it never holds up later wakes. Chat turns and
 autonomous turns run one at a time, so a chat reply can wait for an autonomous
 turn to finish. The setting has no effect outside act mode.
 
