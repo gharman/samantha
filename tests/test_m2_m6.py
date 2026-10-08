@@ -333,3 +333,24 @@ def test_silence_pauses_sentinel_wakes(tmp_path: Path) -> None:
     assert llm.calls == 0
     resident.quiet_until = 0
     assert cognition.wake(WakeEvent("stall", {"series": "loss"})) is not None
+
+
+def test_analysis_inventory_reports_cut_files(tmp_path: Path) -> None:
+    cognition = Cognition(fake_resident(tmp_path), None)
+    inventory = {
+        "entry": "main.py",
+        "files": {
+            "main.py": {"text": "a" * 15_000},
+            "other.py": {"text": "b" * 3_000},
+        },
+        "truncated": ["earlier.py"],
+    }
+    out = cognition._analysis_inventory(inventory)
+    assert len(out["files"]["main.py"]["source_excerpt"]) == 15_000
+    assert len(out["files"]["other.py"]["source_excerpt"]) == 2_500
+    assert out["truncated"] == ["earlier.py", "other.py"]
+
+    inventory["files"]["main.py"]["text"] = "a" * 25_000
+    out = cognition._analysis_inventory(inventory)
+    assert len(out["files"]["main.py"]["source_excerpt"]) == 20_000
+    assert out["truncated"] == ["earlier.py", "main.py", "other.py"]
