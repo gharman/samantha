@@ -162,6 +162,7 @@ class ActController:
             ],
             "prior_tool_results": transcript,
             "recent_chat": self._recent_chat(),
+            "open_findings": self._open_findings(),
             "instructions": (
                 "Prefer a declared_knobs path (declared by the host, bounds-checked) "
                 "when one fits the request. Choose converse for ordinary conversation. "
@@ -180,7 +181,10 @@ class ActController:
                 "future-call interceptor instead of installing independent next-event rules. "
                 "Prefer intercepting a live progress/render/print callback and transforming "
                 "its message argument; use raw output rewriting only when no emitting callable "
-                "is reachable, and use source null unless the stream is verified."
+                "is reachable, and use source null unless the stream is verified. "
+                "If the request asks for help and open_findings or operator_intent show an "
+                "unmet target, act on it with in-range changes that you predict meet the "
+                "target."
             ),
         }
 
@@ -221,6 +225,27 @@ class ActController:
                 "post-action synthesis failed: %s", exc
             )
             return planned_reply or f"Post-action explanation failed: {exc}"
+
+    def _open_findings(self) -> list[dict[str, Any]]:
+        """Open flags from sentinel wakes, and the latest questions and proposals."""
+        cognition = getattr(self.resident, "cognition", None)
+        flags = list(getattr(cognition, "open_flags", {}).values())[-10:]
+        rows = [
+            row
+            for row in self.resident.journal.recent(200)
+            if row.get("type") in {"question", "proposal"}
+        ]
+        return [self._clip(row) for row in [*flags, *rows[-5:]]]
+
+    @staticmethod
+    def _clip(row: dict[str, Any], limit: int = 2_000) -> dict[str, Any]:
+        """Cap long string fields (flag evidence can be large) to bound the context."""
+        return {
+            key: value[:limit] + "..."
+            if isinstance(value, str) and len(value) > limit
+            else value
+            for key, value in row.items()
+        }
 
     def _recent_activity(self) -> list[dict[str, Any]]:
         observer = getattr(self.resident, "observer", None)

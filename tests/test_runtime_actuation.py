@@ -1281,3 +1281,49 @@ def test_context_ranks_paths_named_by_directives(monkeypatch: object) -> None:
     paths = plain._context("help", [], 1)["live_paths"]
     assert "module:g::BOMB_ODDS" not in paths
     assert plain.runtime.queries == ["help"]
+
+def test_open_findings_cap_flags_and_latest_questions_and_proposals(
+    tmp_path: Path,
+) -> None:
+    current = resident(tmp_path)
+    current.cognition = SimpleNamespace(
+        open_flags={f"f{i}": {"id": f"f{i}", "status": "open"} for i in range(12)}
+    )
+    for i in range(7):
+        current.journal.write("question" if i % 2 else "proposal", id=f"r{i}")
+        current.journal.write("chat", text=f"noise {i}")
+    findings = ActController(current, object())._open_findings()
+    assert [row["id"] for row in findings[:10]] == [f"f{i}" for i in range(2, 12)]
+    assert [row["id"] for row in findings[10:]] == [f"r{i}" for i in range(2, 7)]
+
+
+def test_open_findings_empty_without_cognition_or_journal_rows(
+    tmp_path: Path,
+) -> None:
+    assert ActController(resident(tmp_path), object())._open_findings() == []
+
+
+def test_open_findings_clip_long_evidence(tmp_path: Path) -> None:
+    current = resident(tmp_path)
+    current.cognition = SimpleNamespace(
+        open_flags={"a": {"id": "a", "evidence": "x" * 5000}}
+    )
+    (row,) = ActController(current, object())._open_findings()
+    assert len(row["evidence"]) < 2100
+
+
+def test_planner_context_carries_flag_and_help_instruction(tmp_path: Path) -> None:
+    current = resident(tmp_path)
+    current.cognition = SimpleNamespace(
+        open_flags={"a": {"id": "a", "claim": "goal not met"}}
+    )
+    seen: list[dict[str, object]] = []
+
+    class LLM:
+        def plan_action(self, messages: list[dict[str, str]]) -> dict[str, object]:
+            seen.append(json.loads(messages[0]["content"]))
+            return {"reply": "ok", "operations": []}
+
+    ActController(current, LLM()).handle("help")
+    assert seen[0]["open_findings"] == [{"id": "a", "claim": "goal not met"}]
+    assert "asks for help and open_findings" in str(seen[0]["instructions"])
