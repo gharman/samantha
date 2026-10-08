@@ -294,7 +294,7 @@ def test_wake_findings_use_a_schema_and_reach_the_operator(tmp_path: Path) -> No
 
     schema = _wake_format()["schema"]
     kinds = schema["properties"]["actions"]["items"]["properties"]["type"]["enum"]
-    assert kinds == ["flag", "question", "proposal"]
+    assert kinds == ["flag", "question", "proposal", "resolve"]
     resident = fake_resident(tmp_path)
     resident.key = "project"
     llm = FakeLLM(
@@ -354,3 +354,52 @@ def test_analysis_inventory_reports_cut_files(tmp_path: Path) -> None:
     out = cognition._analysis_inventory(inventory)
     assert len(out["files"]["main.py"]["source_excerpt"]) == 20_000
     assert out["truncated"] == ["earlier.py", "main.py", "other.py"]
+
+
+def _flag(summary: str) -> dict[str, object]:
+    return {"type": "flag", "summary": summary, "evidence": "e", "prediction": ""}
+
+
+def test_wake_can_resolve_a_flag_and_frees_budget(tmp_path: Path) -> None:
+    resident = fake_resident(tmp_path)
+    resident.config.flag_budget = 1
+    llm = FakeLLM({"stall": {"assessment": "x", "actions": [_flag("pinned")]}})
+    cognition = Cognition(resident, llm)
+    cognition.wake(WakeEvent("stall", {}))
+    (flag_id,) = cognition.open_flags
+    # At budget, a second flag is dropped but the wake still runs.
+    cognition.wake(WakeEvent("stall", {}))
+    assert list(cognition.open_flags) == [flag_id]
+    llm.scripts["stall"] = {
+        "assessment": "fixed",
+        "actions": [
+            {"type": "resolve", "flag_id": flag_id, "summary": "util recovered"}
+        ],
+    }
+    cognition.wake(WakeEvent("stall", {}))
+    assert cognition.open_flags == {}
+    rows = resident.journal.recent(50, "flag_resolved")
+    assert rows[-1]["id"] == flag_id and rows[-1]["reason"] == "util recovered"
+    llm.scripts["stall"] = {"assessment": "x", "actions": [_flag("again")]}
+    cognition.wake(WakeEvent("stall", {}))
+    assert len(cognition.open_flags) == 1
+
+
+def test_resolve_command_lists_and_closes_flags(tmp_path: Path) -> None:
+    from samantha.chat.server import ChatServer
+
+    resident = fake_resident(tmp_path)
+    resident.key = "project"
+    cognition = Cognition(
+        resident, FakeLLM({"s": {"assessment": "x", "actions": [_flag("a")]}})
+    )
+    cognition.wake(WakeEvent("s", {}))
+    resident.cognition = cognition
+    (flag_id,) = cognition.open_flags
+    server = ChatServer(resident, tmp_path / "run")
+    assert flag_id in server._handle({"type": "command", "text": "/resolve"})["reply"]
+    assert server._handle({"type": "command", "text": "/resolve nope"})["reply"] == (
+        "No such open flag."
+    )
+    reply = server._handle({"type": "command", "text": f"/resolve {flag_id}"})
+    assert flag_id in reply["reply"] and cognition.open_flags == {}
