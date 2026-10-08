@@ -64,6 +64,16 @@ are unbudgeted by default; optional positive limits can be set with
 `SAMANTHA_FLAG_BUDGET`, where zero means unlimited. A value that is not a number
 is ignored with a warning and the default is used.
 
+By default, act mode changes the program only in reply to an operator message.
+Set `SAMANTHA_AUTONOMY=goal` to give standing approval for one more case: when a
+sentinel finds an aspiration gap (a series below its declared target), Samantha
+also runs one act-planning turn for it, at most once per series every 10 minutes.
+That turn is bounded by the operator goal and the `# daemon:` directives like any
+chat turn, and its changes are journaled and revertible the same way. The journal
+records the request as a `chat` row with `direction` `auto`. Chat turns and
+autonomous turns run one at a time, so a chat reply can wait for an autonomous
+turn to finish. The setting has no effect outside act mode.
+
 Open flags stay open until resolved. A later wake can resolve a flag its evidence
 disproves, and the operator can close flags in chat with `/resolve <id>` or
 `/resolve all` (`/resolve` alone lists them). At the flag budget, wakes continue so
