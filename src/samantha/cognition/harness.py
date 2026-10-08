@@ -34,6 +34,9 @@ healthy or the evidence does not clear the bar. Action types:
 - question: one question about operator intent that would change your advice.
 - proposal: a specific change (source diff or configuration) with a prediction:
   metric, direction, magnitude, and horizon.
+- resolve: close an entry of open_flags whose concern the evidence now disproves
+  or shows fixed. Set flag_id to its id and summary to why. Leave flag_id empty
+  for every other action type.
 """
 
 
@@ -251,12 +254,8 @@ Analyzed {len(inventory.get("files", {}))} project files.
             self.wakes.popleft()
         cfg = self.resident.config
         if (
-            (cfg.max_wakes_per_hour > 0 and len(self.wakes) >= cfg.max_wakes_per_hour)
-            or (
-                cfg.token_budget_per_day > 0 and self.tokens >= cfg.token_budget_per_day
-            )
-            or (cfg.flag_budget > 0 and len(self.open_flags) >= cfg.flag_budget)
-        ):
+            cfg.max_wakes_per_hour > 0 and len(self.wakes) >= cfg.max_wakes_per_hour
+        ) or (cfg.token_budget_per_day > 0 and self.tokens >= cfg.token_budget_per_day):
             if not self.warned:
                 logging.getLogger("samantha").warning("cognition budget exhausted")
                 self.warned = True
@@ -267,6 +266,10 @@ Analyzed {len(inventory.get("files", {}))} project files.
                 "evidence": event.evidence,
                 "mode": cfg.mode,
                 "operator_intent": operator_intent(self.resident),
+                "open_flags": [
+                    {"id": flag["id"], "summary": flag.get("summary")}
+                    for flag in self.open_flags.values()
+                ],
             }
         )
         try:
@@ -296,7 +299,23 @@ Analyzed {len(inventory.get("files", {}))} project files.
         for action in actions:
             kind = action.get("type", "none")
             body = {k: v for k, v in action.items() if k != "type"}
+            if kind == "resolve":
+                self.resolve_flag(
+                    str(body.get("flag_id") or ""), str(body.get("summary") or "")
+                )
+                continue
+            if not body.get("flag_id"):
+                body.pop("flag_id", None)
             if kind == "flag":
+                budget = self.resident.config.flag_budget
+                if budget > 0 and len(self.open_flags) >= budget:
+                    # Wakes continue so open flags can still be resolved.
+                    if not self.warned:
+                        logging.getLogger("samantha").warning(
+                            "flag budget exhausted; resolve flags to raise new ones"
+                        )
+                        self.warned = True
+                    continue
                 body.setdefault("id", uuid.uuid4().hex[:8])
                 body.setdefault("status", "open")
                 body.setdefault("evidence", evidence)
@@ -319,6 +338,16 @@ Analyzed {len(inventory.get("files", {}))} project files.
                 self._notify("proposal", body.get("body", body))
             elif kind == "update_model":
                 (self.resident.state / "model.md").write_text(str(body.get("text", "")))
+
+    def resolve_flag(self, flag_id: str, reason: str = "") -> bool:
+        """Close an open flag; True when it existed. Frees flag budget."""
+        flag = self.open_flags.pop(flag_id, None)
+        if flag is None:
+            return False
+        flag["status"] = "resolved"
+        self.resident.journal.write("flag_resolved", id=flag_id, reason=reason)
+        self.notices.append(f"resolved: {flag.get('summary') or flag_id}")
+        return True
 
     def _notify(self, kind: str, body: dict[str, Any]) -> None:
         text = str(body.get("summary") or body.get("text") or body.get("knob") or body)

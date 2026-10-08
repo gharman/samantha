@@ -123,6 +123,8 @@ class ChatServer:
                 "mode": self.resident.config.mode,
                 "reply": f"Goal updated: {goal}",
             }
+        if text == "/resolve" or text.startswith("/resolve "):
+            return self._resolve(text[len("/resolve") :].strip())
         if text and (cognition := getattr(self.resident, "cognition", None)):
             reply = cognition.chat(text)
             drain = getattr(cognition, "drain_notices", None)
@@ -139,6 +141,21 @@ class ChatServer:
             )
         else:
             reply = "Cognition is dormant; configure OPENAI_API_KEY in .env."
+        return {"ok": True, "mode": self.resident.config.mode, "reply": reply}
+
+    def _resolve(self, target: str) -> dict[str, Any]:
+        """Operator closes open flags: '/resolve <id>' or '/resolve all'."""
+        cognition = getattr(self.resident, "cognition", None)
+        flags = getattr(cognition, "open_flags", {})
+        if not target:
+            listing = "\n".join(
+                f"{key}: {flag.get('summary')}" for key, flag in flags.items()
+            )
+            reply = listing or "No open flags."
+        else:
+            ids = list(flags) if target == "all" else target.split()
+            closed = [i for i in ids if cognition.resolve_flag(i, "operator")]
+            reply = f"Resolved: {', '.join(closed)}" if closed else "No such open flag."
         return {"ok": True, "mode": self.resident.config.mode, "reply": reply}
 
     def stop(self) -> None:

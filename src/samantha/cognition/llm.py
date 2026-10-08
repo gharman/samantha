@@ -174,12 +174,16 @@ def _wake_format() -> dict[str, Any]:
     action = {
         "type": "object",
         "properties": {
-            "type": {"type": "string", "enum": ["flag", "question", "proposal"]},
+            "type": {
+                "type": "string",
+                "enum": ["flag", "question", "proposal", "resolve"],
+            },
+            "flag_id": {"type": "string"},
             "summary": {"type": "string"},
             "evidence": {"type": "string"},
             "prediction": {"type": "string"},
         },
-        "required": ["type", "summary", "evidence", "prediction"],
+        "required": ["type", "flag_id", "summary", "evidence", "prediction"],
         "additionalProperties": False,
     }
     return {

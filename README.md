@@ -64,6 +64,11 @@ are unbudgeted by default; optional positive limits can be set with
 `SAMANTHA_FLAG_BUDGET`, where zero means unlimited. A value that is not a number
 is ignored with a warning and the default is used.
 
+Open flags stay open until resolved. A later wake can resolve a flag its evidence
+disproves, and the operator can close flags in chat with `/resolve <id>` or
+`/resolve all` (`/resolve` alone lists them). At the flag budget, wakes continue so
+flags can be resolved, but new flags are dropped until one closes.
+
 If Samantha cannot start, the host keeps running and a single
 `[samantha] disabled: <error>` line goes to stderr (suppressed by
 `SAMANTHA_QUIET`).
