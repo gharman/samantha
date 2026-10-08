@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from typing import Any
 
 from samantha.cognition.harness import operator_intent
@@ -18,8 +19,14 @@ class ActController:
         self.resident = resident
         self.llm = llm
         self.runtime = RuntimeOperator(resident)
+        # Chat turns and autonomous turns share one live graph.
+        self._turn = threading.Lock()
 
     def handle(self, operator_text: str) -> str:
+        with self._turn:
+            return self._handle(operator_text)
+
+    def _handle(self, operator_text: str) -> str:
         planner = getattr(self.llm, "plan_action", None)
         if not planner:
             return self._plain_fallback(operator_text)

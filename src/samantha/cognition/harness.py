@@ -39,6 +39,9 @@ healthy or the evidence does not clear the bar. Action types:
   for every other action type.
 """
 
+# One autonomous act turn per series per this many seconds (SAMANTHA_AUTONOMY=goal).
+AUTONOMY_DWELL_SECONDS = 600.0
+
 
 class Cognition:
     def __init__(self, resident: Any, llm: Any) -> None:
@@ -58,6 +61,8 @@ class Cognition:
 
         # Findings wait here until the operator's next chat reply carries them.
         self.notices: deque[str] = deque(maxlen=20)
+        # Series -> time of the last autonomous act turn (SAMANTHA_AUTONOMY=goal).
+        self._acted: dict[str, float] = {}
 
     def start(self) -> None:
         threading.Thread(
@@ -293,7 +298,35 @@ Analyzed {len(inventory.get("files", {}))} project files.
             tokens_used=used,
         )
         self._actions(response.get("actions", []), event.evidence)
+        self._act_on_gap(event)
         return response
+
+    def _act_on_gap(self, event: Any) -> None:
+        """With SAMANTHA_AUTONOMY=goal in act mode, an unmet target gets one act turn."""
+        cfg, actuator = self.resident.config, getattr(self.resident, "actuator", None)
+        if cfg.mode != "act" or getattr(cfg, "autonomy", "off") != "goal":
+            return
+        if actuator is None or event.sentinel != "gap":
+            return
+        series, now = str(event.evidence.get("series")), time.time()
+        if now - self._acted.get(series, float("-inf")) < AUTONOMY_DWELL_SECONDS:
+            return  # dwell and washout: one autonomous turn per series per 10 min
+        self._acted[series] = now
+        request = (
+            f"Standing approval (SAMANTHA_AUTONOMY=goal): {series} is "
+            f"{event.evidence.get('value')}, below its target "
+            f"{event.evidence.get('reference')}. If the operator goal and the "
+            "'# daemon:' directives allow a change that you predict closes this gap, "
+            "apply it now. Otherwise change nothing and say why."
+        )
+        self.resident.journal.write("chat", direction="auto", text=request)
+        try:
+            reply = actuator.handle(request)
+        except Exception as exc:
+            logging.getLogger("samantha").warning("autonomous act turn failed: %s", exc)
+            return
+        self.resident.journal.write("chat", direction="out", text=reply)
+        self._notify("acted", {"summary": reply.split("\n\n")[0]})
 
     def _actions(self, actions: list[dict[str, Any]], evidence: Any) -> None:
         for action in actions:

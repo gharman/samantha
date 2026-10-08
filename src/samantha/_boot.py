@@ -35,6 +35,8 @@ class Config:
     dotenv_file: str | None = None
     llm_timeout: float = 0.0
     act_max_rounds: int = DEFAULT_ACT_MAX_ROUNDS
+    # "goal": in act mode, an aspiration-gap wake also gets one act turn.
+    autonomy: str = "off"
     log_level: str = "INFO"
     warnings: list[str] = field(default_factory=list)
 
@@ -69,6 +71,7 @@ class Config:
             act_max_rounds=number(
                 "SAMANTHA_ACT_MAX_ROUNDS", int, DEFAULT_ACT_MAX_ROUNDS
             ),
+            autonomy=(env("SAMANTHA_AUTONOMY", "off") or "off").strip().lower(),
             log_level=(
                 "OFF"
                 if _truthy(env("SAMANTHA_QUIET"))
@@ -79,6 +82,12 @@ class Config:
         values.update({k: v for k, v in overrides.items() if v is not None})
         if values["mode"] not in {"off", "observe", "advise", "act"}:
             values["mode"] = "advise"
+        if values["autonomy"] not in {"off", "goal"}:
+            warnings.append(
+                f"SAMANTHA_AUTONOMY={values['autonomy']!r} is not 'off' or 'goal'; "
+                "using 'off'"
+            )
+            values["autonomy"] = "off"
         return cls(**values)
 
 
