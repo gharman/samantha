@@ -1267,6 +1267,7 @@ def ranking_controller(directives: list[str]) -> ActController:
     controller.resident = object()
     controller._project_theory = lambda: ""
     controller._recent_chat = lambda limit=30: []
+    controller._open_findings = lambda: []
     controller._source_structure = lambda: {"directives": directives}
     return controller
 
