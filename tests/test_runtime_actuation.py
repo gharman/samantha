@@ -1228,3 +1228,56 @@ def test_injection_times_out_without_running_later() -> None:
     release.set()
     thread.join(5)
     assert ran == []
+
+
+def test_directive_names_extracts_constants_and_class_attrs() -> None:
+    from samantha.act.controller import _directive_names
+
+    directives = [
+        "MAX_SHOTS in 1..8",
+        "Bomb.speed in 3..9; main() reads them each frame",
+        "MAX_SHOTS again",
+    ]
+    assert _directive_names(directives) == "MAX_SHOTS Bomb.speed"
+    assert _directive_names([]) == ""
+
+
+class RankingRuntime:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+        self.paths = [f"frame:{i}:main:x" for i in range(400)] + ["module:g::BOMB_ODDS"]
+
+    def inventory(self, query: str = "", limit: int = 300) -> list[str]:
+        self.queries.append(query)
+        words = query.split()
+        hits = [p for p in self.paths if any(w in p for w in words)]
+        rest = [p for p in self.paths if p not in hits]
+        return (hits + rest)[:limit]
+
+    def declared_knobs(self) -> list[object]:
+        return []
+
+    def revertible(self) -> list[object]:
+        return []
+
+
+def ranking_controller(directives: list[str]) -> ActController:
+    controller = ActController.__new__(ActController)
+    controller.runtime = RankingRuntime()
+    controller.resident = object()
+    controller._project_theory = lambda: ""
+    controller._recent_chat = lambda limit=30: []
+    controller._source_structure = lambda: {"directives": directives}
+    return controller
+
+
+def test_context_ranks_paths_named_by_directives(monkeypatch: object) -> None:
+    monkeypatch.setattr("samantha.act.controller.operator_intent", lambda r: "")
+    controller = ranking_controller(["BOMB_ODDS in 1..9"])
+    paths = controller._context("help", [], 1)["live_paths"]
+    assert "module:g::BOMB_ODDS" in paths
+
+    plain = ranking_controller([])
+    paths = plain._context("help", [], 1)["live_paths"]
+    assert "module:g::BOMB_ODDS" not in paths
+    assert plain.runtime.queries == ["help"]

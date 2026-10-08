@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from samantha.cognition.harness import operator_intent
@@ -87,8 +88,14 @@ class ActController:
     def _context(
         self, operator_text: str, transcript: list[dict[str, Any]], round_number: int
     ) -> dict[str, Any]:
-        # Ranked by relevance to the request; the planner can search for the rest.
-        inventory = self.runtime.inventory(query=operator_text, limit=300)
+        # Ranked by relevance to the request and to the names that the operator's
+        # '# daemon:' directives mention: a short request ("help") matched nothing,
+        # and frame locals filled the 300. The planner can search for the rest.
+        structure = self._source_structure()
+        named = _directive_names(structure.get("directives", []))
+        inventory = self.runtime.inventory(
+            query=f"{operator_text} {named}".strip(), limit=300
+        )
         return {
             "mode": "act",
             "operator_request": operator_text,
@@ -147,7 +154,7 @@ class ActController:
                 ),
             },
             "project_theory": self._project_theory(),
-            "source_structure": self._source_structure(),
+            "source_structure": structure,
             "declared_knobs": self.runtime.declared_knobs(),
             "live_paths": inventory,
             "active_interventions": [
@@ -320,3 +327,10 @@ def _decode(value: Any, default: Any) -> Any:
     if not isinstance(value, str):
         raise ValueError(f"expected a JSON string, got {type(value).__name__}")
     return json.loads(value)
+
+
+def _directive_names(directives: list[Any]) -> str:
+    """CONSTANT and Class.attr names that '# daemon:' directives mention."""
+    text = " ".join(map(str, directives))
+    names = re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b|\b[A-Z]\w*\.\w+\b", text)
+    return " ".join(dict.fromkeys(names))
