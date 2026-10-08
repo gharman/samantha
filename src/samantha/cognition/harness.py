@@ -129,11 +129,17 @@ class Cognition:
     def _analysis_inventory(self, inventory: dict[str, Any]) -> dict[str, Any]:
         """Compact raw source into a fast but project-wide analysis payload."""
         files = {}
+        cut = []
         remaining = 70_000
         entry = inventory.get("entry")
         for path, details in inventory.get("files", {}).items():
-            excerpt_budget = 8_000 if path == entry else 2_500
-            excerpt = str(details.get("text", ""))[: min(excerpt_budget, remaining)]
+            # The entry file usually holds the main loop that reads the knobs; at
+            # 8000 characters pygame's aliens example stopped in main() setup.
+            excerpt_budget = 20_000 if path == entry else 2_500
+            text = str(details.get("text", ""))
+            excerpt = text[: min(excerpt_budget, remaining)]
+            if len(excerpt) < len(text):
+                cut.append(path)
             remaining = max(0, remaining - len(excerpt))
             files[path] = {
                 "docstring": details.get("docstring"),
@@ -148,7 +154,7 @@ class Cognition:
             "directives": inventory.get("directives", []),
             "notes": inventory.get("notes", []),
             "config": inventory.get("config", {}),
-            "truncated": inventory.get("truncated", []),
+            "truncated": [*inventory.get("truncated", []), *cut],
         }
 
     def _write_model(self, analysis: dict[str, Any], inventory: dict[str, Any]) -> None:
