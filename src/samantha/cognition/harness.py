@@ -308,10 +308,11 @@ Analyzed {len(inventory.get("files", {}))} project files.
             return
         if actuator is None or event.sentinel != "gap":
             return
-        series, now = str(event.evidence.get("series")), time.time()
-        if now - self._acted.get(series, float("-inf")) < AUTONOMY_DWELL_SECONDS:
+        # Measured from when the sentinel fired, the same clock its re-arm uses.
+        series, at = str(event.evidence.get("series")), event.at
+        if at - self._acted.get(series, float("-inf")) < AUTONOMY_DWELL_SECONDS:
             return  # dwell and washout: one autonomous turn per series per 10 min
-        self._acted[series] = now
+        self._acted[series] = at
         request = (
             f"Standing approval (SAMANTHA_AUTONOMY=goal): {series} is "
             f"{event.evidence.get('value')}, below its target "

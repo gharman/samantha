@@ -68,6 +68,8 @@ By default, act mode changes the program only in reply to an operator message.
 Set `SAMANTHA_AUTONOMY=goal` to give standing approval for one more case: when a
 sentinel finds an aspiration gap (a series below its declared target), Samantha
 also runs one act-planning turn for it, at most once per series every 10 minutes.
+While the target stays unmet, the gap fires again every 10 minutes, so a change
+that fell short, or a turn that failed, gets another try.
 That turn is bounded by the operator goal and the `# daemon:` directives like any
 chat turn, and its changes are journaled and revertible the same way. The journal
 records the request as a `chat` row with `direction` `auto`, followed by the reply

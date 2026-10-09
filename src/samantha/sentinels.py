@@ -3,8 +3,9 @@
 from __future__ import annotations
 import math
 import re
+import time
 from itertools import islice
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -12,11 +13,16 @@ from typing import Any
 class WakeEvent:
     sentinel: str
     evidence: dict[str, Any]
+    at: float = field(default_factory=time.time)
 
 
 class Sentinels:
-    def __init__(self, metrics: Any) -> None:
-        self.metrics, self.seen_templates, self.fired = metrics, set(), set()
+    def __init__(self, metrics: Any, rearm: dict[str, float] | None = None) -> None:
+        self.metrics, self.seen_templates = metrics, set()
+        # Sentinel and series -> when it last fired. Each fires once, unless rearm
+        # names its sentinel: then it fires again that many seconds later.
+        self.fired: dict[str, float] = {}
+        self.rearm = rearm or {}
 
     def inspect_line(self, text: str) -> list[WakeEvent]:
         events: list[WakeEvent] = []
@@ -55,16 +61,14 @@ class Sentinels:
         return self._once(events)
 
     def _once(self, events: list[WakeEvent]) -> list[WakeEvent]:
-        fresh = [
-            e
-            for e in events
-            if e.sentinel
-            + str(e.evidence.get("series", e.evidence.get("template", "")))
-            not in self.fired
-        ]
-        for e in fresh:
-            self.fired.add(
-                e.sentinel
-                + str(e.evidence.get("series", e.evidence.get("template", "")))
+        fresh = []
+        for e in events:
+            key = e.sentinel + str(
+                e.evidence.get("series", e.evidence.get("template", ""))
             )
+            last = self.fired.get(key)
+            after = self.rearm.get(e.sentinel)
+            if last is None or (after is not None and e.at - last >= after):
+                self.fired[key] = e.at
+                fresh.append(e)
         return fresh
