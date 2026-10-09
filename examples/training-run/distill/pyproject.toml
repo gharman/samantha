@@ -1,0 +1,8 @@
+# This file marks distill/ as Samantha's project root: Samantha reads the code
+# here, and the .env file here (if there is one).
+[project]
+name = "distill"
+version = "0.1.0"
+description = "Distill a teacher function into a small student network from synthetic data"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.0,<3", "matplotlib>=3.9,<4"]
