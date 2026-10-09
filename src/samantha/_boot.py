@@ -267,11 +267,17 @@ def arm(entry: str | Path | None = None, **overrides: object) -> Resident | None
 def _start_runtime(current: Resident) -> None:
     """Start cognition and local chat; failures cannot escape into the host."""
     try:
-        from .cognition.harness import Cognition
+        from .cognition.harness import AUTONOMY_DWELL_SECONDS, Cognition
         from .cognition.llm import OpenAILLM
         from .sentinels import Sentinels
 
-        current.sentinels = Sentinels(current.observer.metrics)
+        autonomous = current.config.mode == "act" and current.config.autonomy == "goal"
+        # An unmet target keeps waking cognition, so a nudge that fell short (or a
+        # turn that failed) gets another act turn after the dwell.
+        current.sentinels = Sentinels(
+            current.observer.metrics,
+            rearm={"gap": AUTONOMY_DWELL_SECONDS} if autonomous else None,
+        )
         if current.config.api_key and current.config.mode in {"advise", "act"}:
             current.cognition = Cognition(
                 current,

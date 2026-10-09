@@ -252,3 +252,66 @@ def test_autonomy_setting_is_resolved_and_validated(
     config = Config.resolve(_dotenv_start=tmp_path)
     assert config.autonomy == "off"
     assert any("SAMANTHA_AUTONOMY" in warning for warning in config.warnings)
+
+
+def unmet_metrics() -> MetricStore:
+    metrics = MetricStore()
+    for _ in range(20):
+        metrics.ingest("goal met: 0 (target 1)")
+    return metrics
+
+
+def test_gap_fires_once_without_rearm() -> None:
+    sentinels = Sentinels(unmet_metrics())
+    assert [e.sentinel for e in sentinels.inspect_metrics()] == ["stall", "gap"]
+    for key in sentinels.fired:
+        sentinels.fired[key] -= 3600
+    assert sentinels.inspect_metrics() == []
+
+
+def test_rearmed_gap_fires_again_after_the_dwell() -> None:
+    sentinels = Sentinels(unmet_metrics(), rearm={"gap": 600.0})
+    assert [e.sentinel for e in sentinels.inspect_metrics()] == ["stall", "gap"]
+    assert sentinels.inspect_metrics() == []  # still inside the dwell
+    for key in sentinels.fired:
+        sentinels.fired[key] -= 601
+    # Only the sentinel that rearm names fires again.
+    assert [e.sentinel for e in sentinels.inspect_metrics()] == ["gap"]
+
+
+def test_unmet_target_gets_another_turn_after_the_dwell(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    speed_module(tmp_path, monkeypatch)
+    current, llm = resident(tmp_path)
+    first = gap_event()
+    current.cognition.wake(first)
+    settle()
+    evidence = dict(first.evidence)
+    current.cognition.wake(WakeEvent("gap", evidence, at=first.at + 300))
+    settle()
+    assert llm.plans == 1
+    current.cognition.wake(WakeEvent("gap", evidence, at=first.at + 600))
+    settle()
+    assert llm.plans == 2
+
+
+def test_runtime_rearms_gap_only_for_goal_autonomy_in_act_mode(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    from samantha._boot import _start_runtime
+
+    monkeypatch.setattr("samantha.chat.server.ChatServer.start", lambda self: None)
+    monkeypatch.setattr("samantha.cli.runtime_dir", lambda: tmp_path / "run")
+    for mode, autonomy, rearm in [
+        ("act", "goal", {"gap": 600.0}),
+        ("act", "off", {}),
+        ("advise", "goal", {}),
+    ]:
+        current = SimpleNamespace(
+            config=Config(mode=mode, autonomy=autonomy),
+            observer=SimpleNamespace(metrics=MetricStore()),
+            stop=lambda: None,
+        )
+        _start_runtime(current)
+        assert current.sentinels.rearm == rearm
