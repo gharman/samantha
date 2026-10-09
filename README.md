@@ -19,6 +19,7 @@ import samantha
 The import arms the complete resident: observation, deterministic sentinels,
 advisory cognition, persistent state, and a local chat socket. The host program
 is launched normally; it does not need to be wrapped by a Samantha command.
+To see it work with no API key, try one of the [examples](#examples).
 
 Startup identifies the full project and attach PID, summarizes the entry source
 and active watch set, and asynchronously validates OpenAI credentials and model
@@ -172,3 +173,16 @@ Chat is a normal plain-text model conversation even while deeper source analysis
 is incomplete; structured JSON is reserved for internal cognition actions.
 
 Windows is currently untested.
+
+## Examples
+
+Two small programs show Samantha at work. Each one has an offline mode with a
+scripted model, so you can try it with no API key.
+
+- [examples/aliens](examples/aliens/): pygame's alien shooter. You type `help`,
+  and Samantha makes the game easier while you play.
+- [examples/training-run](examples/training-run/): a training run where one
+  region of the data never trains. Samantha finds it and fixes it live.
+
+Each example's README gives the steps from a fresh clone. To update a clone,
+run `git pull` in it.

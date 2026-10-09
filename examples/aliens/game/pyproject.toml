@@ -1,0 +1,8 @@
+# This file marks game/ as Samantha's project root: Samantha reads the code
+# here, and the .env file here (if there is one).
+[project]
+name = "aliens"
+version = "0.1.0"
+description = "pygame's aliens example, with Samantha"
+requires-python = ">=3.12"
+dependencies = ["pygame>=2.6,<3"]
