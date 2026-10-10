@@ -42,26 +42,76 @@ class ActController:
         if not planner:
             return None
         with self._turn:
-            transcript: list[dict[str, Any]] = []
-            for round_number in range(max_rounds):
-                context = self._context(request, transcript, round_number)
-                plan = planner([{"role": "user", "content": json.dumps(context)}])
-                operations = self._decode_operations(plan.get("operations", []))
-                reply = str(plan.get("reply") or "")
-                writes = [op for op in operations if self._is_write(op)]
-                if not operations:
-                    return {"operations": [], "reply": reply}
-                if writes:
-                    return self._prepared(writes, plan, reply)
-                group = self.runtime.execute(request, operations, "contextual")
-                transcript.append(
-                    {
-                        "plan": plan,
-                        "group_id": group.id,
-                        "status": group.status,
-                        "results": [result.as_dict() for result in group.results],
-                    }
-                )
+            return self._plan_move(planner, request, max_rounds)
+
+    def give_back(self, request: str, max_rounds: int = 3) -> str:
+        """One turn on a slack line (SAMANTHA_AUTONOMY_SLACK): plan as prepare()
+        does, then apply at once at most one set on a declared knob that moves it
+        toward its starting value (its value at samantha.expose) and not past it.
+        Other operations are refused. The reply is the receipt, or why nothing
+        changed. No second model call."""
+        planner = getattr(self.llm, "plan_action", None)
+        if not planner:
+            return "Runtime planning is unavailable, so nothing was changed."
+        with self._turn:
+            move = self._plan_move(planner, request, max_rounds)
+            refused, kept = list(move.get("refused", [])), []
+            for op in move["operations"]:
+                why = _not_toward_start(op)
+                if why is None and kept:
+                    why = f"{op['path']}: one knob per slack turn"
+                if why:
+                    refused.append(why)
+                else:
+                    kept.append(op)
+            reply = str(move.get("reply") or "")
+            refusal = f"Refused: {'; '.join(refused)}." if refused else ""
+            if not kept:
+                return " ".join(filter(None, (reply or "Nothing given back.", refusal)))
+            # Lifetime "process": a "temporary" give-back would undo itself when it
+            # expired, with no slack line to justify that.
+            group = self.runtime.execute(request, kept, "process")
+            planned = f"Planned before the change: {reply}" if reply else ""
+            return self._receipt(group, " ".join(filter(None, (planned, refusal))))
+
+    @staticmethod
+    def off_start() -> list[str]:
+        """Declared knobs with a numeric starting value that they no longer have."""
+        from samantha import _exposures
+
+        names = []
+        for name, exposure in list(_exposures.items()):
+            start = getattr(exposure, "start", None)
+            try:
+                value = exposure.get()
+            except Exception:
+                continue
+            if _is_number(start) and _is_number(value) and value != start:
+                names.append(name)
+        return names
+
+    def _plan_move(self, planner: Any, request: str, max_rounds: int) -> dict[str, Any]:
+        """Planning rounds until the first plan with write operations (see prepare)."""
+        transcript: list[dict[str, Any]] = []
+        for round_number in range(max_rounds):
+            context = self._context(request, transcript, round_number)
+            plan = planner([{"role": "user", "content": json.dumps(context)}])
+            operations = self._decode_operations(plan.get("operations", []))
+            reply = str(plan.get("reply") or "")
+            writes = [op for op in operations if self._is_write(op)]
+            if not operations:
+                return {"operations": [], "reply": reply}
+            if writes:
+                return self._prepared(writes, plan, reply)
+            group = self.runtime.execute(request, operations, "contextual")
+            transcript.append(
+                {
+                    "plan": plan,
+                    "group_id": group.id,
+                    "status": group.status,
+                    "results": [result.as_dict() for result in group.results],
+                }
+            )
         return {"operations": [], "reply": "no move after the read rounds"}
 
     def _prepared(
@@ -448,6 +498,34 @@ def _knob_value(path: str) -> Any:
     from samantha import _exposures
 
     return _exposures[path.removeprefix("exposed:")].get()
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _not_toward_start(op: dict[str, Any]) -> str | None:
+    """None when a set moves a declared knob toward its starting value and not
+    past it (a slack turn's only kind of change); otherwise why not."""
+    from samantha import _exposures
+
+    path, value = op["path"], op.get("value")
+    exposure = _exposures.get(path.removeprefix("exposed:"))
+    start = getattr(exposure, "start", None)
+    if exposure is None or not _is_number(start):
+        return f"{path}: no numeric starting value"
+    current = exposure.get()
+    if not (_is_number(current) and _is_number(value)):
+        return f"{path}: not a number"
+    if current == start:
+        return f"{path}: already at its starting value {start!r}"
+    low, high = sorted((current, start))
+    if value == current or not low <= value <= high:
+        return (
+            f"{path}: {value!r} does not move it from {current!r} toward its "
+            f"starting value {start!r} without going past it"
+        )
+    return None
 
 
 def _decode(value: Any, default: Any) -> Any:

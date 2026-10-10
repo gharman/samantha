@@ -23,6 +23,9 @@ class Exposure:
     set: Callable[[Any], None]
     bounds: tuple[float, float] | None = None
     kind: str = "value"
+    # The value when the knob was declared (None for a setter-only knob). Slack
+    # lines (SAMANTHA_AUTONOMY_SLACK) move a knob back toward it, never past it.
+    start: Any = None
 
 
 def expose(
@@ -34,7 +37,8 @@ def expose(
     kind: str = "value",
     bounds: tuple[float, float] | None = None,
 ) -> None:
-    """Declare a knob act mode may prefer, with optional numeric bounds."""
+    """Declare a knob act mode may prefer, with optional numeric bounds. Its
+    value now is its starting value."""
     if setter is not None:
 
         def get() -> None:
@@ -50,7 +54,11 @@ def expose(
             setattr(obj, attr, value)
     else:
         raise ValueError("provide setter or obj and attr")
-    _exposures[name] = Exposure(name, get, set_value, bounds, kind)
+    try:
+        start = get()
+    except Exception:  # a broken getter must not stop the declaration
+        start = None
+    _exposures[name] = Exposure(name, get, set_value, bounds, kind, start)
     if current := resident():
         current.ledger.register(name, bounds)
 
