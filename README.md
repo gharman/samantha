@@ -40,7 +40,7 @@ python demo.py training
 ```
 
 A small training run with a live plot. One region of the data never trains,
-but the total loss looks fine. At about round 30 Samantha flags it. Then she
+but the total loss looks fine. At about round 30 Samantha notices it. Then she
 raises that region's sampling weight in the running process, the plot marks
 her change, and the red curve goes up. Close the plot window to stop.
 
