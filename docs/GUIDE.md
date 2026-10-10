@@ -69,6 +69,8 @@ key came from.
 | `SAMANTHA` | `advise` | The mode: `off`, `observe`, `advise`, or `act` ([modes](#modes-and-autonomy)). |
 | `SAMANTHA_AUTONOMY` | `off` | `goal`: in act mode, Samantha acts by herself on an unmet goal. |
 | `SAMANTHA_AUTONOMY_DWELL` | `600` | Seconds between two autonomous turns for one series (at least 30). |
+| `SAMANTHA_AUTONOMY_TRIGGER` | none | A regular expression. With `SAMANTHA_AUTONOMY=goal` in act mode, a line of program output that matches it is a miss against the goal ([miss lines](#miss-lines)). |
+| `SAMANTHA_AUTONOMY_TRIGGER_DWELL` | `15` | Seconds between two act turns on miss lines (at least 10). |
 | `SAMANTHA_GOAL` | none | The operator goal, in words. |
 | `SAMANTHA_MODEL` | `gpt-5.6-terra` | The model. Samantha uses OpenAI's Responses API. |
 | `SAMANTHA_BASE_URL` | `https://api.openai.com` | The API address (for a proxy or a compatible server). |
@@ -160,6 +162,35 @@ dwell of 90 s.
 An act turn stops after `SAMANTHA_ACT_MAX_ROUNDS` model rounds, and earlier
 when a round only repeats reads with the same results. Chat turns and
 autonomous turns run one at a time.
+
+### Miss lines
+
+A gap wake comes only after a series stays below its target for 20 to 25
+lines. If your program prints a line at each failure (for example
+`player hit` in the aliens demo), Samantha can act at the first failure. Set
+`SAMANTHA_AUTONOMY_TRIGGER` to a regular expression for that line. It has an
+effect only with `SAMANTHA=act` and `SAMANTHA_AUTONOMY=goal`; with other
+settings Samantha ignores it and gives a warning at startup.
+
+1. At startup, at the same time as the program theory, Samantha plans her
+   first move: one planning call, with the goal, the `# daemon:` directives,
+   and the declared knobs. She keeps only `set` operations on declared knobs
+   with values inside their bounds, and she changes nothing yet. The terminal
+   shows `first move ready: ...` (or `no first move planned: ...`). While she
+   plans, `cognition.preparing` is true (the aliens demo waits for it).
+2. At the first line that matches, she applies that move at once, with no
+   model call, through the same audited operations as all other changes. If a
+   knob of the move changed after the plan (for example in the chat), she does
+   not apply it and plans again.
+3. Each later matching line can start an act turn: one planning call, and no
+   second model call to write the reply (the reply is the receipt and the
+   planner's own words). At most one such turn starts per
+   `SAMANTHA_AUTONOMY_TRIGGER_DWELL` (default 15 s, at least 10 s), and never
+   while one runs. The request gives the number of misses since the last
+   turn, not the text of the lines.
+
+Gap wakes and their autonomous turns continue as before. `samantha.silence()`
+also stops the turns on miss lines.
 
 ## Talk to Samantha
 
@@ -267,7 +298,10 @@ permissions. The project ID is a hash of the project root path. The files:
 Python version, the demo packages, and the key (from `.env` or the
 environment). Then it starts the demo with `SAMANTHA=act`,
 `SAMANTHA_AUTONOMY=goal` (`--wait`: `SAMANTHA_AUTONOMY=off`), and
-`SAMANTHA_AUTONOMY_DWELL=90` (unless the environment sets it). Each demo folder
+`SAMANTHA_AUTONOMY_DWELL=90`. For the aliens demo (not with `--wait`) it also
+sets `SAMANTHA_AUTONOMY_TRIGGER=^player hit\b` and
+`SAMANTHA_AUTONOMY_TRIGGER_DWELL=10`. A setting in the environment wins over
+these values, except `SAMANTHA` and `SAMANTHA_AUTONOMY`. Each demo folder
 has its own `pyproject.toml`, so Samantha's project root is the demo program's
 folder, and she reads only that program.
 
@@ -287,12 +321,15 @@ folder, and she reads only that program.
 - `declare_knobs()`: `samantha.expose()` for the five knobs (`BOMB_ODDS`,
   `MAX_SHOTS`, `ALIEN_ODDS`, `Bomb.speed`, `Alien.speed`), so the ranges are
   hard limits.
-- The game starts paused while Samantha reads it; P pauses and resumes (by key
-  code or typed letter), Space starts, and the game pauses when its window
-  loses the keyboard (for example when you click the terminal).
+- The game starts paused while Samantha reads it and plans her first move; P
+  pauses and resumes (by key code or typed letter), Space starts, and the game
+  pauses when its window loses the keyboard (for example when you click the
+  terminal).
 - A hit respawns the player and prints `player hit · deaths: N · score: S`. The
   original game ends at the first hit, and Samantha sees only what the program
-  prints.
+  prints. In the demo this line is a [miss line](#miss-lines): Samantha applies
+  her first move at the first hit, and while the hits continue she can make
+  another act turn every 10 s.
 - Every 2 s of play the game prints the hits in the last minute and
   `goal met: 0` or `1` `(target 1)`. This line is the metric for the gap
   sentinel. The hit rate is printed before the words, so it is not a metric
@@ -306,10 +343,17 @@ aliens. Samantha sets the values from her own thread; a module or class
 attribute assignment is atomic in CPython.
 
 `examples/aliens/play.py` runs the game unchanged and adds the panel under it:
-Samantha's state, her flags and questions, and a green line for each change
-she makes (it compares the five knobs on each frame). The same lines go to the
-terminal as `[demo] Samantha changed ...`. `play.py` is outside the game's
-project root, so Samantha does not read or change it.
+Samantha's state, her flags and questions, her reply when a turn changes
+nothing, and a green line for each change she makes (it compares the five
+knobs on each frame). The same lines go to the terminal as
+`[demo] Samantha changed ...`. `play.py` is outside the game's project root, so
+Samantha does not read or change it.
+
+The timing in live runs (gpt-5.6-terra, a scripted player, 2026-10-10): the
+theory call took 16 to 18 s and the first-move plan 5 to 6 s, at the same
+time. The green line came 0.1 to 0.2 s after the first hit. In these runs the
+model's first move set all five knobs to the easy end of their ranges, so a
+later hit got a turn that changed nothing (its planning call took 3 s).
 
 License: pygame's README says "The programs in the `examples` subdirectory are
 in the public domain" (pygame-ce's README says the same). The changes have the
