@@ -1,20 +1,21 @@
-"""Run the aliens example offline: a scripted model and a scripted player.
+"""The aliens demo as an unattended story: a scripted player that is not good
+at the game, and (by default) a scripted model on 127.0.0.1. Only the tests and
+the maintainers use it; the demo itself is `python demo.py aliens`.
 
-No API key and no network. A small server on 127.0.0.1 answers Samantha's
-model requests with fixed text that starts with "(scripted model)". All else
-is the real Samantha: it reads the game, watches its output, wakes on the
-unmet goal, takes the chat message "help", plans, changes the game's
-constants in the running process, and writes the change to its journal.
+All else is the real thing: examples/aliens/play.py (the panel) runs
+game/aliens.py, and the real Samantha reads the game, watches its output, wakes
+on the unmet goal, and (SAMANTHA_AUTONOMY=goal) changes the game's knobs by
+herself in the running process.
 
-  python rehearse.py                # a window, normal speed (about 5 minutes)
-  python rehearse.py --headless     # no window, as fast as possible (for CI)
-  python rehearse.py --self-test    # check the scripted model only
+  python aliens_story.py --headless            # about 30 s, scripted model
+  python aliens_story.py --headless --live     # the real model: OPENAI_API_KEY and
+                                               # SAMANTHA_BASE_URL from the environment
+  python aliens_story.py --self-test           # check the scripted model only
 
-The game file is not changed for this. Before the game starts, this script
-replaces three pygame functions from the outside: pg.key.get_pressed (the
-scripted player), pg.time.Clock (one hook per frame), and pg.event.get (it
-posts real KEYDOWN events, for example P to start). Lines that start with
-"[rehearse]" go past Samantha's output tap, so Samantha does not see them.
+Before the game starts, this script replaces three pygame functions from the
+outside: pg.key.get_pressed (the scripted player), pg.time.Clock (one hook per
+frame), and pg.event.get (it posts real KEYDOWN events, for example P to
+start). Lines that start with "[story]" go past Samantha's output tap.
 """
 
 from __future__ import annotations
@@ -29,18 +30,19 @@ import socket
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-HERE = Path(__file__).resolve().parent
-GAME = HERE / "game" / "aliens.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from scripted import LABEL, format_name, message, scripted_env, serve  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[2]
+PLAY = REPO / "examples" / "aliens" / "play.py"
 GOAL = "the player should be hit less than once per minute"
-LABEL = "(scripted model)"
 
 # --- the scripted model ------------------------------------------------------
 
-CHANGE = {"BOMB_ODDS": 600, "Bomb/speed": 3, "MAX_SHOTS": 8}
+CHANGE = {"BOMB_ODDS": 600, "Bomb.speed": 3, "MAX_SHOTS": 8}
 ADVICE = (f"{LABEL} The player is far from the goal: goal.met stays 0, and the game "
           "prints about 6 hits per minute against a goal of under 1. Most hits are "
           "bombs. I suggest three changes, each to the easy end of its range: "
@@ -50,17 +52,10 @@ ADVICE_WORDS = r"\b(suggest|recommend|advise|what should|what would)\b"
 ACT_WORDS = r"\b(help|yes|do it|go ahead|ok|apply|fix it|make it easier)\b"
 
 
-def _message(text: str) -> dict[str, Any]:
-    """One Responses API payload with this output text."""
-    return {"id": "resp_scripted", "object": "response", "status": "completed",
-            "output": [{"type": "message", "role": "assistant",
-                        "content": [{"type": "output_text", "text": text}]}]}
-
-
 def cold_start() -> dict[str, Any]:
     return {
         "summary": f"{LABEL} aliens.py is pygame's alien shooter. A hit respawns the "
-                   "player and prints a 'player hit' line. Every 5 s it prints the hits "
+                   "player and prints a 'player hit' line. Every 2 s it prints the hits "
                    "per minute and goal met (target 1).",
         "architecture": ["main() runs a 40 fps loop and reads the module constants each frame",
                          "Bomb.speed moves bombs every frame; BOMB_ODDS sets how often they drop"],
@@ -74,36 +69,30 @@ def cold_start() -> dict[str, Any]:
 
 
 def wake(event: dict[str, Any]) -> dict[str, Any]:
-    """One hit is not a finding; a goal that stays unmet is."""
+    """A goal that stays unmet is a finding; nothing else is."""
     evidence = event.get("evidence", {})
     if event.get("event") != "gap" or evidence.get("series") != "goal.met":
         return {"assessment": f"{LABEL} nothing to report", "actions": []}
     value, reference = float(evidence["value"]), float(evidence["reference"])
     return {"assessment": f"{LABEL} the player misses the goal", "actions": [{
-        "type": "flag",
-        "summary": f"{LABEL} The player does not meet the goal: goal.met is {value:g} "
+        "type": "flag", "flag_id": "",
+        "summary": f"{LABEL} The player is hit too often: goal.met is {value:g} "
                    f"(target {reference:g}) and does not move.",
-        "evidence": f"gap sentinel: goal.met={value}, target={reference}",
+        "evidence": f"gap sentinel: {evidence.get('line', '')}",
         "prediction": "disproved if goal.met reaches 1 with no change to the game",
     }]}
 
 
-def _knob_paths(context: dict[str, Any]) -> dict[str, str]:
-    """CHANGE keys to the live paths that Samantha listed or found."""
-    seen = [item.get("path", "") for item in context.get("live_paths") or []]
-    for step in context.get("prior_tool_results") or []:
-        for result in step.get("results", []):
-            if result.get("op") == "search" and isinstance(result.get("value"), list):
-                seen += [item.get("path", "") for item in result["value"]]
-    found = {key: next((p for p in seen if p.startswith("module:")
-                        and p.endswith("::" + key)), None) for key in CHANGE}
-    return {k: v for k, v in found.items() if v}
+def knob_paths(context: dict[str, Any]) -> dict[str, str]:
+    """CHANGE keys to the declared knob paths (samantha.expose in the game)."""
+    declared = {k.get("path", "") for k in context.get("declared_knobs") or []}
+    return {key: f"exposed:{key}" for key in CHANGE if f"exposed:{key}" in declared}
 
 
 def _op(op: str, path: str, effect: str, **extra: Any) -> dict[str, Any]:
     base = {"op": op, "effect": effect, "path": path, "query": None, "value_json": None,
             "args_json": None, "kwargs_json": None, "lifetime": "process",
-            "duration_s": None, "reason": "the player misses the goal; the operator asked"}
+            "duration_s": None, "reason": "the player misses the goal"}
     return {**base, **extra}
 
 
@@ -116,19 +105,15 @@ def plan(context: dict[str, Any]) -> dict[str, Any]:
     if not re.search(ACT_WORDS, request, re.I):
         return {**base, "intent": "converse", "operations": [],
                 "reply": f"{LABEL} I can make the game easier. Say help."}
-    failures = [r for step in prior for r in step["results"]
-                if not r["ok"] and r.get("op") != "search"]
+    failures = [r for step in prior for r in step["results"] if not r["ok"]]
     if failures:
         return {**base, "intent": "converse", "operations": [],
                 "reply": f"{LABEL} Nothing changed: {failures[0]['detail']}."}
-    paths = _knob_paths(context)
+    paths = knob_paths(context)
     if len(paths) < len(CHANGE):
-        if prior:
-            missing = sorted(set(CHANGE) - set(paths))
-            return {**base, "intent": "converse", "operations": [],
-                    "reply": f"{LABEL} I could not find {missing}."}
-        search = _op("search", "", "read", query="BOMB_ODDS MAX_SHOTS Bomb speed")
-        return {**base, "done": False, "intent": "inspect", "operations": [search], "reply": ""}
+        missing = sorted(set(CHANGE) - set(paths))
+        return {**base, "intent": "converse", "operations": [],
+                "reply": f"{LABEL} I could not find {missing}."}
     ops = [_op("set", paths[key], "write", value_json=json.dumps(value))
            for key, value in CHANGE.items()]
     return {**base, "intent": "act", "operations": ops,
@@ -142,7 +127,7 @@ def chat(content: str) -> str:
         done = [r for r in context.get("verified_tool_results", [])
                 if r.get("ok") and r.get("op") == "set"]
         if done:
-            changed = ", ".join(f"{r['path'].split('::')[-1].replace('/', '.')} = {r['value']}"
+            changed = ", ".join(f"{r['path'].removeprefix('exposed:')} = {r['value']}"
                                 for r in done)
             return (f"{LABEL} Done: {changed}. The game reads these every frame, so the "
                     "change is live, with no restart.")
@@ -151,53 +136,16 @@ def chat(content: str) -> str:
 
 
 def respond(body: dict[str, Any]) -> dict[str, Any]:
-    """The Responses API payload for one request body."""
-    fmt = ((body.get("text") or {}).get("format") or {}).get("name")
+    fmt = format_name(body)
     content = str(body["input"][-1]["content"])
     if fmt == "samantha_cold_start_analysis":
-        return _message(json.dumps(cold_start()))
+        return message(json.dumps(cold_start()))
     if fmt == "samantha_wake":
         start = content.rfind('{"event"')
-        return _message(json.dumps(wake(json.loads(content[start:]) if start >= 0 else {})))
+        return message(json.dumps(wake(json.loads(content[start:]) if start >= 0 else {})))
     if fmt == "samantha_runtime_plan":
-        return _message(json.dumps(plan(json.loads(content))))
-    return _message(chat(content))
-
-
-class Handler(BaseHTTPRequestHandler):
-    def _send(self, code: int, payload: dict[str, Any]) -> None:
-        data = json.dumps(payload).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_GET(self) -> None:  # noqa: N802
-        if self.path.startswith("/v1/models/"):
-            self._send(200, {"id": self.path.rsplit("/", 1)[-1], "object": "model"})
-        else:
-            self._send(404, {"error": {"message": "not found"}})
-
-    def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/v1/responses":
-            self._send(404, {"error": {"message": "not found"}})
-            return
-        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-        try:
-            self._send(200, respond(body))
-        except Exception as exc:
-            self._send(500, {"error": {"message": f"scripted model: {exc!r}"}})
-
-    def log_message(self, *args: Any) -> None:
-        pass
-
-
-def serve() -> ThreadingHTTPServer:
-    """Start the scripted model on a free local port, on a daemon thread."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, name="scripted-model", daemon=True).start()
-    return server
+        return message(json.dumps(plan(json.loads(content))))
+    return message(chat(content))
 
 
 def self_test() -> int:
@@ -210,28 +158,45 @@ def self_test() -> int:
     assert text("samantha_wake", hit)["actions"] == []
     gap = 'x{"event": "gap", "evidence": {"series": "goal.met", "value": 0.0, "reference": 1.0}}'
     assert text("samantha_wake", gap)["actions"][0]["type"] == "flag"
+    declared = [{"path": f"exposed:{k}"} for k in CHANGE]
     ctx: dict[str, Any] = {"operator_request": "What do you suggest?", "prior_tool_results": [],
-                           "live_paths": []}
+                           "declared_knobs": declared}
     assert text("samantha_runtime_plan", json.dumps(ctx))["reply"] == ADVICE
-    ctx["operator_request"] = "help"
-    assert [o["op"] for o in plan(ctx)["operations"]] == ["search"]
-    ctx["prior_tool_results"] = [{"results": [{"op": "search", "ok": True, "value": [
-        {"path": f"module:__main__::{k}"} for k in CHANGE]}]}]
+    ctx["operator_request"] = ("Standing approval (SAMANTHA_AUTONOMY=goal): goal.met is 0.0, "
+                               "below its target 1.0. ... apply it now.")
     assert {o["path"]: o["value_json"] for o in plan(ctx)["operations"]} == {
-        "module:__main__::BOMB_ODDS": "600", "module:__main__::MAX_SHOTS": "8",
-        "module:__main__::Bomb/speed": "3"}
+        "exposed:BOMB_ODDS": "600", "exposed:MAX_SHOTS": "8", "exposed:Bomb.speed": "3"}
     ctx["prior_tool_results"] = [{"results": [{"op": "set", "ok": False, "detail": "bounds"}]}]
     assert "bounds" in plan(ctx)["reply"]
     assert parse_press("0:p") == (0, "p") and parse_press("200:text-p") == (200, "text-p")
-    print("rehearse self-test: PASS")
+    print("story self-test: PASS")
     return 0
 
 
 # --- the scripted player and the hooks ----------------------------------------
 
+class Tee:
+    """sys.__stdout__ that also keeps each line (the panel's "[demo]" lines)."""
+
+    def __init__(self, stream) -> None:
+        self.stream, self.lines, self.buffer = stream, [], ""
+
+    def write(self, text: str) -> int:
+        self.buffer += text
+        *done, self.buffer = self.buffer.split("\n")
+        self.lines += done
+        return self.stream.write(text)
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.stream, name)
+
+
 def say(text: str) -> None:
     """Write to the real stdout, past Samantha's output tap."""
-    sys.__stdout__.write(f"[rehearse] {text}\n")
+    sys.__stdout__.write(f"[story] {text}\n")
     sys.__stdout__.flush()
 
 
@@ -299,6 +264,13 @@ def knob_values(module) -> dict[str, float]:
             "Alien.speed": module.Alien.speed}
 
 
+def samantha_ready() -> bool:
+    """True when Samantha has read the game (or is off): the game says "Press P"."""
+    module = sys.modules.get("samantha")
+    cog = getattr(module.resident(), "cognition", None) if module else None
+    return cog is None or cog.provider_ready is False or cog.analysis_ready is not None
+
+
 class Session:
     """Everything that happens once per frame, and what it records."""
 
@@ -311,10 +283,14 @@ class Session:
         self.calls = 0
         self.hits: list[int] = []
         self.seen: dict[str, float] | None = None
-        self.change_frame: int | None = None
-        self.goal_after: list[int] = []  # the game's goal values after the change
+        self.changes: list[dict[str, Any]] = []
+        self.play_started: float | None = None
+        self.first_unmet: int | None = None
+        self.flag_frame: int | None = None
+        self.goal_after: list[int] = []
         self.stop_at = args.frames or 0
-        self.talk = None if args.samantha == "off" or args.no_talk else Talker(self)
+        self.shots_due: list[tuple[int, str]] = []
+        self.talk = Talker(self) if args.say and args.samantha != "off" else None
 
     def presses_due(self) -> None:
         """Post the next scripted key press when it is due (from pg.event.get)."""
@@ -334,49 +310,65 @@ class Session:
         for event in key_events(self.pg, key):
             self.pg.event.post(event)
 
+    def shot(self, name: str) -> None:
+        if not self.args.shots:
+            return
+        out = Path(self.args.shots)
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / f"{name}.png"
+        self.pg.image.save(self.pg.display.get_surface(), str(path))
+        say(f"frame {self.frame:05d}  screenshot {path}")
+
     def on_tick(self, main_locals: dict) -> None:
+        if self.frame == 0:
+            self.play_started = time.monotonic()
         self.frame += 1
         module = sys.modules["__main__"]
         values = knob_values(module)
         if self.seen is None:
             self.seen = values
         if values != self.seen:
-            for k, v in values.items():
-                if v != self.seen[k]:
-                    say(f"frame {self.frame:05d}  {k} changed live: {self.seen[k]:g} → {v:g} "
-                        "(no restart)")
-            if self.change_frame is None:
-                self.change_frame = self.frame
+            moved = {k: (self.seen[k], v) for k, v in values.items() if v != self.seen[k]}
+            seconds = time.monotonic() - (self.play_started or time.monotonic())
+            self.changes.append({"frame": self.frame, "play_s": round(self.frame / 40, 1),
+                                 "wall_s": round(seconds, 1), "moved": moved})
+            for k, (old, new) in moved.items():
+                say(f"frame {self.frame:05d}  {k} changed live: {old:g} → {new:g}")
+            if len(self.changes) == 1:
                 self.stop_at = self.frame + self.args.after
+                self.shots_due.append((self.frame + self.args.shot_delay, "after-change"))
             self.seen = values
         self.hits = main_locals.get("hits") or []  # the game's list of hit frames
-        if self.frame % 200 == 0:
-            hits = self.hits
-            minutes = min(self.frame, 4800) / 2400
-            rate = len([f for f in hits if f > self.frame - 4800]) / minutes
-            if self.change_frame is not None:
+        if self.frame % 80 == 0:
+            minutes = min(self.frame, 2400) / 2400
+            rate = len([f for f in self.hits if f > self.frame - 2400]) / minutes
+            if rate >= 1 and self.first_unmet is None:
+                self.first_unmet = self.frame
+            if self.changes:
                 self.goal_after.append(int(rate < 1))
-            if not self.args.quiet:
+            if not self.args.quiet and self.frame % 400 == 0:
                 say(f"frame {self.frame:05d}  deaths {main_locals.get('deaths')}  "
                     + "  ".join(f"{k}={v:g}" for k, v in values.items()))
+        cog = getattr(getattr(sys.modules.get("samantha"), "resident", lambda: None)(),
+                      "cognition", None)
+        if self.flag_frame is None and getattr(cog, "open_flags", None):
+            self.flag_frame = self.frame
+            self.shots_due.append((self.frame + 40, "flag"))
+        for due in [d for d in self.shots_due if d[0] <= self.frame]:
+            self.shots_due.remove(due)
+            self.shot(due[1])
         if self.talk:
             self.talk.maybe_start()
         if self.bot:
             self.bot.step()
         if self.stop_at and self.frame >= self.stop_at:
+            self.shot("last")
             self.pg.event.post(self.pg.event.Event(self.pg.QUIT))
             self.stop_at = 0
 
 
-def samantha_ready() -> bool:
-    """True when Samantha has read the game (or is off): the game says "Press P"."""
-    module = sys.modules.get("samantha")
-    cog = getattr(module.resident(), "cognition", None) if module else None
-    return cog is None or cog.provider_ready is False or cog.analysis_ready is not None
-
-
 class Talker:
-    """Type "help" to Samantha through its chat socket, as the samantha CLI does."""
+    """Type a line to Samantha through her chat socket, as the samantha CLI does."""
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -399,12 +391,12 @@ class Talker:
 
         path = runtime_dir() / f"{os.getpid()}.sock"
         with socket.socket(socket.AF_UNIX) as conn:
-            conn.settimeout(120)
+            conn.settimeout(300)
             conn.connect(str(path))
             incoming = conn.makefile("rb")
             incoming.readline()  # hello
-            message = {"type": "command", "text": self.session.args.say}
-            conn.sendall((json.dumps(message) + "\n").encode())
+            request = {"type": "command", "text": self.session.args.say}
+            conn.sendall((json.dumps(request) + "\n").encode())
             reply = json.loads(incoming.readline())
         for notice in reply.get("notices") or []:
             say(f"⚑ {notice}")
@@ -414,59 +406,82 @@ class Talker:
             say(f"samantha: {line}")
 
 
+def journal_rows(state: Path) -> list[dict[str, Any]]:
+    rows = []
+    for path in sorted(state.glob("*/journal-*.jsonl")):
+        rows += [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return rows
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--self-test", action="store_true", help="check the scripted model and exit")
     p.add_argument("--headless", action="store_true",
-                   help="no window and no sound (SDL dummy drivers); runs as fast as possible")
+                   help="no window and no sound (SDL dummy drivers)")
     p.add_argument("--fps", type=int, default=None,
-                   help="frame cap (default 40 with a window, no cap with --headless)")
+                   help="frame cap (default 40; 400 with --headless and the scripted model)")
+    p.add_argument("--live", action="store_true",
+                   help="the real model: OPENAI_API_KEY and SAMANTHA_BASE_URL from the "
+                        "environment (default: the scripted model)")
     p.add_argument("--seed", type=int, default=3, help="seed for the game and the player")
     p.add_argument("--samantha", choices=("act", "off"), default="act",
                    help="off: only the game and the scripted player")
-    p.add_argument("--say", default="help", help="what to type to Samantha (default: help)")
+    p.add_argument("--wait", action="store_true",
+                   help="SAMANTHA_AUTONOMY=off: Samantha acts only when spoken to (--say)")
+    p.add_argument("--say", default=None, help="a line to type to Samantha (with --wait: help)")
     p.add_argument("--talk-at", type=int, default=4800, metavar="FRAME",
-                   help="type at Samantha's first flag, or at this frame (default 4800, 2 min)")
-    p.add_argument("--after", type=int, default=7200, metavar="FRAMES",
-                   help="frames to play after the change (default 7200, 3 min)")
+                   help="type at Samantha's first flag, or at this frame (default 4800)")
+    p.add_argument("--after", type=int, default=2400, metavar="FRAMES",
+                   help="frames to play after the first change (default 2400, 1 min)")
     p.add_argument("--frames", type=int, default=0,
-                   help="stop after this many frames, if no change stops it first "
-                        "(default 2400 with --samantha off, else talk-at + 2 x after)")
-    p.add_argument("--no-talk", action="store_true", help="type nothing to Samantha")
-    p.add_argument("--no-bot", action="store_true", help="no scripted player (you play)")
+                   help="stop after this many frames if no change stops it first "
+                        "(default 2400 with --samantha off, else 9600)")
+    p.add_argument("--no-bot", action="store_true", help="no scripted player")
     p.add_argument("--press", type=parse_press, action="append", metavar="FRAME:KEY",
                    help=f"post a key press at FRAME (0: the start screen); KEY: {', '.join(KEYS)}."
                         " Default: 0:p. Repeat for more presses.")
-    p.add_argument("--quiet", action="store_true", help="no status line every 200 frames")
+    p.add_argument("--quiet", action="store_true", help="no status line every 400 frames")
     p.add_argument("--timeout", type=float, default=900,
                    help="stop the game and fail after this many seconds (default 900)")
-    p.add_argument("--out", default=str(HERE / "out"),
-                   help="directory for Samantha's state of this run (default out/)")
+    p.add_argument("--out", default=str(REPO / "examples" / "aliens" / "out"),
+                   help="directory for Samantha's state of this run")
+    p.add_argument("--shots", default=None, metavar="DIR",
+                   help="save screenshots (the window with the panel) to DIR")
+    p.add_argument("--shot-delay", type=int, default=160,
+                   help="frames after the first change for the after-change screenshot")
+    p.add_argument("--summary", default=None, metavar="FILE",
+                   help="write the measured timeline as JSON to FILE")
     args = p.parse_args(argv)
     if args.self_test:
         return self_test()
-    if not args.frames:  # stop at last, also when no change comes
-        args.frames = 2400 if args.samantha == "off" else args.talk_at + 2 * args.after
+    if args.wait and not args.say:
+        args.say = "help"
+    if not args.frames:
+        args.frames = 2400 if args.samantha == "off" else 9600
     if args.fps is None:
-        args.fps = 400 if args.headless else 40  # Samantha works in real time; 400 is 10x
+        args.fps = 400 if args.headless and not args.live else 40
 
-    os.environ["SAMANTHA"] = args.samantha
+    # Run from the repository root, as demo.py does: Samantha takes the first
+    # file under the working directory on the import stack as the entry point,
+    # and that must be game/aliens.py, not this file.
+    os.chdir(REPO)
+    os.environ.update(SAMANTHA=args.samantha, PYGAME_HIDE_SUPPORT_PROMPT="1")
     server = None
+    state = Path(args.out) / f"state-{time.strftime('%Y%m%d-%H%M%S')}"
     if args.samantha != "off":
-        server = serve()
-        state = Path(args.out) / f"state-{time.strftime('%Y%m%d-%H%M%S')}"
-        os.environ.update(
-            OPENAI_API_KEY="none",  # not a key: the scripted model does not check it
-            SAMANTHA_MODEL="scripted-model",
-            SAMANTHA_BASE_URL=f"http://127.0.0.1:{server.server_address[1]}",
-            SAMANTHA_STATE_DIR=str(state), SAMANTHA_GOAL=GOAL, SAMANTHA_AUTONOMY="off")
-        say(f"scripted model on {os.environ['SAMANTHA_BASE_URL']}; Samantha state in {state}")
+        os.environ.update(SAMANTHA_STATE_DIR=str(state), SAMANTHA_GOAL=GOAL,
+                          SAMANTHA_AUTONOMY="off" if args.wait else "goal")
+        os.environ.setdefault("SAMANTHA_AUTONOMY_DWELL", "90")  # as demo.py
+        if not args.live:
+            server = serve(respond)
+            os.environ.update(scripted_env(server))
+        say(f"model: {'real (live)' if args.live else 'scripted'}; Samantha state in {state}")
     if args.headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
         os.environ["SDL_AUDIODRIVER"] = "dummy"
-    os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
     import pygame as pg
 
+    tee = sys.__stdout__ = Tee(sys.__stdout__)
     session = Session(args, pg)
     real_clock, real_get_pressed, real_event_get = pg.time.Clock, pg.key.get_pressed, pg.event.get
 
@@ -499,35 +514,54 @@ def main(argv: list[str] | None = None) -> int:
     timer.daemon = True
     timer.start()
     try:
-        runpy.run_path(str(GAME), run_name="__main__")
-    except KeyboardInterrupt:
+        runpy.run_path(str(PLAY), run_name="__main__")
+    except (KeyboardInterrupt, SystemExit):
         pass
     timer.cancel()
     say(f"stopped after {session.frame} frames, {time.monotonic() - started:.0f} s")
     if timed_out.is_set():
         return 1
-    if args.samantha == "off" or args.no_talk:
+    if args.samantha == "off":
         return 0
     if session.talk and session.talk.thread:
-        session.talk.thread.join(timeout=120)
+        session.talk.thread.join(timeout=300)
 
+    rows = journal_rows(state)
+    auto = [r for r in rows if r.get("type") == "chat" and r.get("direction") == "auto"]
     replies = session.talk.replies if session.talk else []
-    checks = {
-        "Samantha answered help": bool(replies),
-        "the reply has an intervention receipt": any(
-            "Applied runtime intervention" in r for r in replies),
-        "the game saw a live change (no restart)": session.change_frame is not None,
+    panel = [line for line in tee.lines if line.startswith("[demo] Samantha changed")]
+    checks = {"Samantha raised a flag by herself": session.flag_frame is not None,
+              "the game saw a live change (no restart)": bool(session.changes),
+              "the panel and the terminal showed the change": bool(panel)}
+    if args.wait:
+        checks["Samantha answered"] = bool(replies)
+        checks["the reply has an intervention receipt"] = any(
+            "Applied runtime intervention" in r for r in replies)
+    else:
+        checks["Samantha changed the game by herself (no chat)"] = bool(auto) and not replies
+    summary: dict[str, Any] = {
+        "model": "live" if args.live else "scripted", "fps": args.fps, "seed": args.seed,
+        "frames": session.frame, "first_unmet_frame": session.first_unmet,
+        "flag_frame": session.flag_frame, "changes": session.changes,
+        "autonomous_turns": len(auto), "panel_lines": panel,
+        "flags": [r.get("summary") for r in rows if r.get("type") == "flag"],
+        "replies_out": [r.get("text") for r in rows if r.get("type") == "chat"
+                        and r.get("direction") == "out"],
     }
-    if session.change_frame:
-        # The hit frames come from the game; the game counts frames only in play.
-        # The frame of the change moves the game's random sequence, so the rate
-        # after it is different from run to run.
-        at, end = session.change_frame, session.frame
+    if session.changes:
+        # The hit frames come from the game; it counts frames only in play.
+        at, end = session.changes[0]["frame"], session.frame
         before = sum(f < at for f in session.hits) / (at / 2400)
         after = sum(f >= at for f in session.hits) / max((end - at) / 2400, 1e-9)
-        say(f"hits per minute: {before:.1f} before the change, {after:.1f} after; "
-            f"goal met after the change: {'yes' if 1 in session.goal_after else 'not yet'}")
-        checks["the player is hit at most half as often after the change"] = after <= before / 2
+        summary.update(hits_per_min_before=round(before, 2), hits_per_min_after=round(after, 2))
+        say(f"first change at frame {at} ({at / 40:.0f} s of play); hits per minute: "
+            f"{before:.1f} before, {after:.1f} after; goal met after the change: "
+            f"{'yes' if 1 in session.goal_after else 'not yet'}")
+        if not args.live:
+            checks["the player is hit at most half as often after the change"] = after <= before / 2
+    summary["checks"] = checks
+    if args.summary:
+        Path(args.summary).write_text(json.dumps(summary, indent=2, default=str))
     for name, ok in checks.items():
         say(f"{'PASS' if ok else 'FAIL'}: {name}")
     if server:

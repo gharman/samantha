@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # Based on pygame's aliens example (pygame 2.6.1, examples/aliens.py), which is
-# in the public domain. Changes for Samantha are described in ../README.md.
+# in the public domain. It runs on pygame-ce. Changes for Samantha are described
+# in docs/GUIDE.md ("The aliens demo").
 """ pygame.examples.aliens
 
 Shows a mini game where you have to defend against aliens.
@@ -27,6 +28,7 @@ Controls
 
 import os
 import random
+import sys
 from typing import List
 
 # import basic pygame modules
@@ -36,6 +38,7 @@ import samantha
 # daemon: goal: the player should be hit less than once per minute
 # daemon: fair game, live: BOMB_ODDS 60-600, MAX_SHOTS 2-8, ALIEN_ODDS 22-100, Bomb.speed 3-9, Alien.speed 4-13
 # daemon: never touch SCORE or SCREENRECT, and never make the game harder
+# daemon: when the goal is not met, act at once: change several of these knobs, enough to meet the goal
 
 # see if we can load more than standard BMP
 if not pg.image.get_extended():
@@ -245,6 +248,23 @@ class Bomb(pg.sprite.Sprite):
         if self.rect.bottom >= 470:
             Explosion(self, self.explosion_group)
             self.kill()
+
+
+def declare_knobs():
+    """The knobs of the "fair game" line, with their ranges as hard limits:
+    Samantha's change to a value outside a range is refused."""
+    game = sys.modules[__name__]
+    for name, owner, attr, bounds in (
+        ("BOMB_ODDS", game, "BOMB_ODDS", (60, 600)),
+        ("MAX_SHOTS", game, "MAX_SHOTS", (2, 8)),
+        ("ALIEN_ODDS", game, "ALIEN_ODDS", (22, 100)),
+        ("Bomb.speed", Bomb, "speed", (3, 9)),
+        ("Alien.speed", Alien, "speed", (4, 13)),
+    ):
+        samantha.expose(name, obj=owner, attr=attr, bounds=bounds)
+
+
+declare_knobs()
 
 
 class Score(pg.sprite.Sprite):
@@ -462,11 +482,11 @@ def main(winstyle=0):
             print(f"player hit · deaths: {deaths} · score: {SCORE}", flush=True)
             player = Player(all)
 
-        # every 5 s of play, measure against the goal
+        # every 2 s of play, measure against the goal (hits in the last minute)
         frame += 1
-        if frame % 200 == 0:
-            minutes = min(frame, 4800) / 2400  # at most the last 2 minutes
-            rate = len([f for f in hits if f > frame - 4800]) / minutes
+        if frame % 80 == 0:
+            minutes = min(frame, 2400) / 2400  # at most the last minute
+            rate = len([f for f in hits if f > frame - 2400]) / minutes
             print(f"{rate:.1f} hits per minute · goal met: {int(rate < 1)} (target 1)", flush=True)
 
         # cap the framerate at 40fps. Also called 40HZ or 40 times per second.

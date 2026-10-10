@@ -1,5 +1,0 @@
-[project]
-name = "samantha-testbed"
-version = "0.1.0"
-description = "A small host program for exercising Samantha end to end"
-requires-python = ">=3.12"
