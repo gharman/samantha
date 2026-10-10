@@ -79,7 +79,10 @@ def test_demo_help_lists_both_demos(tmp_path: Path) -> None:
     assert "--wait" in result.stdout
 
 
-def test_demo_settings_act_on_hits_only_in_the_aliens_demo() -> None:
+STATUS = "1.0 hits per minute (last minute of play) · in the fun band (0.5-2)"
+
+
+def test_demo_settings_too_hard_and_too_easy_lines_only_in_the_aliens_demo() -> None:
     sys.path.insert(0, str(REPO))
     try:
         import demo
@@ -87,13 +90,33 @@ def test_demo_settings_act_on_hits_only_in_the_aliens_demo() -> None:
         sys.path.remove(str(REPO))
     aliens = demo.settings("aliens")
     assert aliens["SAMANTHA_AUTONOMY"] == "goal"
-    assert re.search(aliens["SAMANTHA_AUTONOMY_TRIGGER"], "player hit · deaths: 1 · score: 0")
-    assert not re.search(aliens["SAMANTHA_AUTONOMY_TRIGGER"], "0.0 hits per minute · goal met: 1")
+    miss, slack = aliens["SAMANTHA_AUTONOMY_TRIGGER"], aliens["SAMANTHA_AUTONOMY_SLACK"]
+    for line in ("too hard: the first hit", "too hard: 3 hits in the last minute of play"):
+        assert re.search(miss, line) and not re.search(slack, line)
+    assert re.search(slack, "too easy: 30 s of play with no hit")
+    assert not re.search(miss, "too easy: 30 s of play with no hit")
+    for line in ("player hit · deaths: 2 · score: 7", STATUS):
+        assert not re.search(miss, line) and not re.search(slack, line)
     assert aliens["SAMANTHA_AUTONOMY_TRIGGER_DWELL"] == "10"
-    # --wait (she acts only when asked) and the training demo: no miss lines.
-    assert "SAMANTHA_AUTONOMY_TRIGGER" not in demo.settings("aliens", wait=True)
+    # --wait (she acts only when asked) and the training demo: no such lines.
+    waiting = demo.settings("aliens", wait=True)
+    assert "SAMANTHA_AUTONOMY_TRIGGER" not in waiting
+    assert "SAMANTHA_AUTONOMY_SLACK" not in waiting
     assert demo.settings("training") == {"SAMANTHA": "act", "SAMANTHA_AUTONOMY": "goal",
                                          "SAMANTHA_AUTONOMY_DWELL": "90"}
+
+
+def test_aliens_status_line_is_not_a_metric() -> None:
+    """The hits-per-minute line gives no metric series, so it starts no gap or
+    stall wake (a model call); the too hard and too easy lines do the work."""
+    from samantha.observe.metrics import MetricStore
+
+    metrics = MetricStore()
+    for _ in range(30):
+        assert metrics.ingest(STATUS) == []
+        assert metrics.ingest("0.0 hits per minute (last minute of play) · below the fun "
+                              "band (0.5-2)") == []
+    assert metrics.ingest("too hard: the first hit") == []
 
 
 def test_env_example_has_the_key_name_and_no_key(tmp_path: Path) -> None:
@@ -129,12 +152,56 @@ def test_aliens_space_starts_the_game_and_the_panel_runs(tmp_path: Path) -> None
                             "--timeout", "60", "--shots", str(shots)], tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert _game_lines(result.stdout) == ["paused", "resumed"]
-    assert "hits per minute · goal met:" in result.stdout
+    assert "hits per minute (last minute of play) · " in result.stdout
     assert "[demo] aliens: press P to play" in result.stdout
     import pygame
 
     image = pygame.image.load(str(shots / "last.png"))
     assert image.get_size() == (640, 480 + 136)  # the game, and the panel under it
+
+
+def test_aliens_prints_too_hard_and_too_easy_lines(tmp_path: Path) -> None:
+    """The first hit prints "too hard", and CRUISE_SECONDS of play with no hit
+    prints "too easy" (here 5 s, from ALIENS_CRUISE_SECONDS)."""
+    _needs("pygame")
+    result = _run(STORIES, ["aliens_story.py", "--headless", "--samantha", "off",
+                            "--frames", "2400", "--quiet", "--timeout", "60"], tmp_path,
+                  ALIENS_CRUISE_SECONDS="5")
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = result.stdout.splitlines()
+    first_hit = lines.index("player hit · deaths: 1 · score: 5")
+    assert lines[first_hit + 1] == "too hard: the first hit"
+    assert "too hard: the first hit" not in lines[first_hit + 2:]
+    easy = [line for line in lines if line.startswith("too easy: ")]
+    assert easy and all(re.fullmatch(r"too easy: \d+ s of play with no hit", e) for e in easy)
+    assert all(int(e.split()[2]) >= 5 for e in easy)
+
+
+def test_panel_says_easier_and_harder(monkeypatch: object) -> None:
+    """A change back toward the starting values is "harder", with a playful line."""
+    sys.path.insert(0, str(REPO / "examples" / "aliens"))
+    try:
+        import play
+    finally:
+        sys.path.pop(0)
+    from types import SimpleNamespace
+
+    game = SimpleNamespace(BOMB_ODDS=60, MAX_SHOTS=2, ALIEN_ODDS=22,
+                           Bomb=SimpleNamespace(speed=9), Alien=SimpleNamespace(speed=13))
+    monkeypatch.setitem(sys.modules, "__main__", game)
+    feed = play.Feed()
+    panel = play.Panel(None, feed)
+    panel.watch_knobs()  # the starting values
+    game.BOMB_ODDS, game.Bomb.speed = 195, 7
+    panel.watch_knobs()
+    game.BOMB_ODDS = 60
+    panel.watch_knobs()
+    assert feed.snapshot() == [
+        ("change", "Samantha changed BOMB_ODDS 60 -> 195, Bomb.speed 9 -> 7 (easier)"),
+        ("say", f"Samantha: {play.CRUISING[0]}"),
+        ("change", "Samantha changed BOMB_ODDS 195 -> 60 (harder)"),
+    ]
+    assert play.CRUISING[0] == "You're cruising. Bringing the aliens back."
 
 
 def test_panel_reads_samantha_lines() -> None:
@@ -193,7 +260,8 @@ stories = pytest.mark.skipif(os.getenv("RUN_EXAMPLE_STORIES") != "1",
 
 @stories
 def test_aliens_story_samantha_acts_at_the_first_hit(tmp_path: Path) -> None:
-    """The first move is planned before P; the first hit applies it at once."""
+    """(a) The first move is planned before P; the first hit applies it at once.
+    It is one notch on two knobs, not every knob to its easy end."""
     _needs("pygame")
     summary = tmp_path / "summary.json"
     result = _run(STORIES, ["aliens_story.py", "--headless", "--quiet", "--out",
@@ -201,15 +269,57 @@ def test_aliens_story_samantha_acts_at_the_first_hit(tmp_path: Path) -> None:
                             "--max-latency", "2"], tmp_path, timeout=600)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "FAIL" not in result.stdout
-    assert "first move ready: BOMB_ODDS 60 → 300" in result.stderr  # a [samantha] line
-    assert "[demo] Samantha changed BOMB_ODDS: 60 → 300" in result.stdout
+    # [samantha] lines
+    assert "first move ready: BOMB_ODDS 60 → 195, Bomb.speed 9 → 7" in result.stderr
+    assert "slack lines: /^too easy\\b/" in result.stderr
+    assert "[demo] Samantha changed BOMB_ODDS: 60 → 195 (live, no restart, easier)" in (
+        result.stdout)
     data = json.loads(summary.read_text())
     first = data["changes"][0]
-    assert first["moved"] == {"BOMB_ODDS": [60, 300]}
+    assert first["moved"] == {"BOMB_ODDS": [60, 195], "Bomb.speed": [9, 7]}
+    assert first["way"] == "easier"
     # Quiet until the first hit, then the change within 2 s (no model call).
     assert data["checks"]["no change before the first hit"]
     assert 0 <= data["first_change_after_first_hit_s"] <= 2
     assert first["frame"] >= data["first_hit_frame"]
+    assert data["checks"]["no knob was ever harder than at the start"]
+
+
+@stories
+def test_aliens_story_harder_when_the_player_cruises(tmp_path: Path) -> None:
+    """(b) 30 s of play with no hit: one notch harder, one knob, back toward the
+    start. (c) Never harder than the start: the give-back stops at the starting
+    values, and a request past them is refused."""
+    _needs("pygame")
+    summary = tmp_path / "summary.json"
+    result = _run(STORIES, ["aliens_story.py", "--headless", "--quiet", "--dodge", "--out",
+                            str(tmp_path / "out"), "--summary", str(summary),
+                            "--max-latency", "2"], tmp_path, timeout=600)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "FAIL" not in result.stdout
+    data = json.loads(summary.read_text())
+    assert data["fps"] == 100 and data["cruise_s"] == 30
+    ways = [(c["way"], c["moved"]) for c in data["changes"]]
+    assert ways == [("easier", {"BOMB_ODDS": [60, 195], "Bomb.speed": [9, 7]}),
+                    ("harder", {"BOMB_ODDS": [195, 60]}),
+                    ("harder", {"Bomb.speed": [7, 9]})]
+    first, second, third = data["changes"]
+    assert 0 <= data["first_change_after_first_hit_s"] <= 2
+    # (b) Each harder change came at the next "too easy" line (every 30 s of play
+    # with no hit), at once (the scripted planning call is fast).
+    assert 30 <= second["play_s_since_last_hit"] < 60
+    assert 60 <= third["play_s_since_last_hit"] < 90
+    assert 0 <= second["after_too_easy_s"] <= 2 and 0 <= third["after_too_easy_s"] <= 2
+    assert data["harder_steps"] == 2 and data["easier_steps"] == 1
+    # (c) Back at the start, later "too easy" lines changed nothing; no knob was
+    # ever harder than at the start; Alien.speed 15 was refused.
+    assert data["knobs_at_start_at_end"]
+    assert data["too_easy_frames_with_no_turn_after_the_last_change"]
+    assert data["beyond_start"] == []
+    assert any("Alien.speed: 15 is outside (4, 13)" in t for t in data["replies_out"])
+    assert "[demo] Samantha: You're cruising. Bringing the aliens back." in result.stdout
+    assert "[demo] Samantha changed BOMB_ODDS: 195 → 60 (live, no restart, harder)" in (
+        result.stdout)
 
 
 @stories

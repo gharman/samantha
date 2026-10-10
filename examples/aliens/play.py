@@ -6,7 +6,9 @@ __main__, and adds a strip under the game that shows:
 - Samantha's state (starting, reading the game, planning her first move,
   watching, or off),
 - what she says by herself (her flags, questions, and proposals),
-- each change she makes to the game, with the old and the new value.
+- each change she makes to the game, with the old and the new value, and
+  whether it makes the game easier or harder (harder: back toward the starting
+  values, after a "too easy" line; then the panel also says so in a playful line).
 
 The same change lines also go to the terminal ("[demo] Samantha changed ...").
 The panel is not part of the game. This file is outside Samantha's project
@@ -32,6 +34,10 @@ KNOBS = {"BOMB_ODDS": (None, "BOMB_ODDS"), "MAX_SHOTS": (None, "MAX_SHOTS"),
          "Alien.speed": ("Alien", "speed")}
 COLORS = {"say": (235, 235, 235), "change": (120, 230, 130), "error": (250, 130, 120),
           "status": (170, 170, 185), "title": (255, 210, 120)}
+# The panel's line when Samantha makes the game harder again (in turn).
+CRUISING = ("You're cruising. Bringing the aliens back.",
+            "Too easy? The aliens want a word.",
+            "Nice dodging. Time for a little more challenge.")
 
 
 def say(text: str) -> None:
@@ -128,6 +134,8 @@ def samantha_status() -> tuple[str, str]:
     if cog.preparing:
         return "status", "is planning her first move..."
     autonomous = current.config.mode == "act" and current.config.autonomy == "goal"
+    if autonomous and getattr(current.config, "autonomy_slack", None):
+        return "status", "is watching: easier when you get hit, harder when you cruise."
     if autonomous and getattr(current.config, "autonomy_trigger", None):
         return "status", "is watching. She steps in when you get hit."
     if autonomous:
@@ -145,6 +153,8 @@ class Panel:
         self.drawn: tuple | None = None
         self.fonts: dict[int, object] = {}
         self.knobs: dict[str, float] | None = None
+        self.start: dict[str, float] | None = None  # the knobs before any change
+        self.harder = 0  # changes that made the game harder
         self.handler: SamanthaLog | None = None
 
     def font(self, size: int):
@@ -170,16 +180,29 @@ class Panel:
                    for name, (owner, attr) in KNOBS.items()}
         except AttributeError:
             return
+        if self.start is None:
+            self.start = now
         if self.knobs is not None:
             moved = [(name, self.knobs[name], value) for name, value in now.items()
                      if value != self.knobs[name]]
             if moved:
+                # Harder: each knob moved back toward its starting value (the
+                # game starts at its hardest). Easier: each moved away from it.
+                toward = [abs(new - self.start[name]) < abs(old - self.start[name])
+                          for name, old, new in moved]
+                way = "harder" if all(toward) else "easier" if not any(toward) else ""
+                if way == "harder":
+                    line = f"Samantha: {CRUISING[self.harder % len(CRUISING)]}"
+                    self.feed.add("say", line)
+                    say(line)
+                    self.harder += 1
                 # pygame's default font has no arrow glyph: "->" on the panel.
                 self.feed.add("change", "Samantha changed " + ", ".join(
-                    f"{name} {short(old)} -> {short(new)}" for name, old, new in moved))
+                    f"{name} {short(old)} -> {short(new)}" for name, old, new in moved)
+                    + (f" ({way})" if way else ""))
                 for name, old, new in moved:
                     say(f"Samantha changed {name}: {short(old)} → {short(new)} "
-                        "(live, no restart)")
+                        f"(live, no restart{', ' + way if way else ''})")
         self.knobs = now
 
     def wrap(self, text: str, width: int, font) -> list[str]:

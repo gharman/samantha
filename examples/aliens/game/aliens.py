@@ -35,10 +35,12 @@ from typing import List
 import pygame as pg
 import samantha
 
-# daemon: goal: the player should be hit less than once per minute
+# daemon: goal: keep the game fun: the player is hit 0.5 to 2 times per minute of play, not more and not zero
 # daemon: fair game, live: BOMB_ODDS 60-600, MAX_SHOTS 2-8, ALIEN_ODDS 22-100, Bomb.speed 3-9, Alien.speed 4-13
-# daemon: never touch SCORE or SCREENRECT, and never make the game harder
-# daemon: when the goal is not met, act at once: change several of these knobs, enough to meet the goal
+# daemon: the starting values are the hardest allowed; never touch SCORE, SCREENRECT, FUN_BAND, or CRUISE_SECONDS
+# daemon: a notch is about a quarter of a knob's range; never change more than two knobs at a time
+# daemon: on a "too hard" line, make the game easier by one notch on one or two knobs
+# daemon: on a "too easy" line, make the game harder by one notch on one knob, back toward its starting value
 
 # see if we can load more than standard BMP
 if not pg.image.get_extended():
@@ -52,6 +54,12 @@ BOMB_ODDS = 60  # chances a new bomb will drop
 ALIEN_RELOAD = 12  # frames between new aliens
 SCREENRECT = pg.Rect(0, 0, 640, 480)
 SCORE = 0
+FUN_BAND = (0.5, 2)  # hits per minute of play that keep the game fun
+# No hit for this many seconds of play prints a "too easy" line.
+try:
+    CRUISE_SECONDS = float(os.environ.get("ALIENS_CRUISE_SECONDS", "30"))
+except ValueError:
+    CRUISE_SECONDS = 30.0
 
 main_dir = os.path.split(os.path.abspath(__file__))[0]
 if not os.path.isdir(os.path.join(main_dir, "data")):  # no data/ here: use pygame's own copy
@@ -345,6 +353,7 @@ def main(winstyle=0):
     alienreload = ALIEN_RELOAD
     clock = pg.time.Clock()
     deaths, frame, hits, paused = 0, 0, [], True  # the game starts paused
+    calm = 0  # the frame of the last hit or the last "too easy" line
     focused = pg.key.get_focused() or pg.display.get_driver() == "dummy"
 
     # initialize our starting sprites
@@ -483,13 +492,30 @@ def main(winstyle=0):
             hits.append(frame)
             print(f"player hit · deaths: {deaths} · score: {SCORE}", flush=True)
             player = Player(all)
+            # "too hard": the first hit (the game starts at its hardest), and each hit
+            # above the fun band. Samantha makes the game easier.
+            recent = len([f for f in hits if f > frame - 2400])  # the last minute of play
+            if deaths == 1:
+                print("too hard: the first hit", flush=True)
+            elif recent > FUN_BAND[1]:
+                print(f"too hard: {recent} hits in the last minute of play", flush=True)
+            calm = frame
 
-        # every 2 s of play, measure against the goal (hits in the last minute)
+        # "too easy": no hit for CRUISE_SECONDS of play. Samantha makes the game a
+        # notch harder, but never harder than the start. Then the clock starts again.
         frame += 1
+        if frame - calm >= CRUISE_SECONDS * 40:
+            calm = frame
+            since = (frame - (hits[-1] if hits else 0)) / 40
+            print(f"too easy: {since:.0f} s of play with no hit", flush=True)
+
+        # every 2 s of play, the hits in the last minute of play and the fun band
         if frame % 80 == 0:
-            minutes = min(frame, 2400) / 2400  # at most the last minute
-            rate = len([f for f in hits if f > frame - 2400]) / minutes
-            print(f"{rate:.1f} hits per minute · goal met: {int(rate < 1)} (target 1)", flush=True)
+            recent = len([f for f in hits if f > frame - 2400])
+            band = ("above" if recent > FUN_BAND[1]
+                    else "below" if recent < FUN_BAND[0] else "in")
+            print(f"{recent:.1f} hits per minute (last minute of play) · {band} the fun "
+                  f"band ({FUN_BAND[0]:g}-{FUN_BAND[1]:g})", flush=True)
 
         # cap the framerate at 40fps. Also called 40HZ or 40 times per second.
         clock.tick(40)

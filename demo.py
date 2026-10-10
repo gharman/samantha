@@ -5,9 +5,12 @@
 
 Samantha runs in act mode and acts by herself when a goal stays unmet
 (SAMANTHA_AUTONOMY=goal; another try every 90 s while it stays unmet). In the
-aliens demo, a hit is a miss against the goal (SAMANTHA_AUTONOMY_TRIGGER): she
-plans her first move before you press P, applies it at your first hit, and
-makes another change at most every 10 s while the hits continue.
+aliens demo the goal is a fun band of hits per minute. The game prints "too
+hard" at the first hit and at each hit above the band (SAMANTHA_AUTONOMY_TRIGGER):
+she plans her first move before you press P, applies it at your first hit, and
+makes the game easier again at most every 10 s. It prints "too easy" after 30 s
+of play with no hit (SAMANTHA_AUTONOMY_SLACK): she makes the game a notch harder,
+never harder than at the start.
 Add --wait to make her wait for you: then talk to her with `samantha` in a
 second terminal. The OpenAI key comes from .env in this directory or from the
 environment (the environment wins). See README.md.
@@ -29,11 +32,13 @@ DEMOS = {
 }
 INSTALL = 'python -m pip install -e ".[demos]"'
 # Settings for one demo, when Samantha acts by herself (not with --wait). The
-# environment wins. Aliens: the game prints "player hit · deaths: N · score: S"
-# at each hit; that line is a miss against the goal, so she acts at the first
-# hit, not after the hit rate has been over the goal for a minute.
+# environment wins. Aliens: the game prints "too hard: ..." at the first hit and
+# at each hit above its fun band (a miss: she makes the game easier, at once at
+# the first hit), and "too easy: ..." after 30 s of play with no hit (slack: she
+# makes it a notch harder, back toward the starting values).
 AUTONOMY = {
-    "aliens": {"SAMANTHA_AUTONOMY_TRIGGER": r"^player hit\b",
+    "aliens": {"SAMANTHA_AUTONOMY_TRIGGER": r"^too hard\b",
+               "SAMANTHA_AUTONOMY_SLACK": r"^too easy\b",
                "SAMANTHA_AUTONOMY_TRIGGER_DWELL": "10"},
 }
 
