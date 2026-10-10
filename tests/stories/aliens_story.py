@@ -336,7 +336,8 @@ class Session:
                 say(f"frame {self.frame:05d}  {k} changed live: {old:g} → {new:g}")
             if len(self.changes) == 1:
                 self.stop_at = self.frame + self.args.after
-                self.shots_due.append((self.frame + self.args.shot_delay, "after-change"))
+            self.shots_due.append((self.frame + self.args.shot_delay,
+                                   f"after-change-{len(self.changes)}"))
             self.seen = values
         self.hits = main_locals.get("hits") or []  # the game's list of hit frames
         if self.frame % 80 == 0:
@@ -351,9 +352,13 @@ class Session:
                     + "  ".join(f"{k}={v:g}" for k, v in values.items()))
         cog = getattr(getattr(sys.modules.get("samantha"), "resident", lambda: None)(),
                       "cognition", None)
-        if self.flag_frame is None and getattr(cog, "open_flags", None):
+        # A finding she raised by herself: a flag, a question, or a proposal.
+        spoke = getattr(cog, "open_flags", None) or any(
+            n.startswith(("flag:", "question:", "proposal:"))
+            for n in list(getattr(cog, "notices", None) or []))
+        if self.flag_frame is None and spoke:
             self.flag_frame = self.frame
-            self.shots_due.append((self.frame + 40, "flag"))
+            self.shots_due.append((self.frame + 40, "finding"))
         for due in [d for d in self.shots_due if d[0] <= self.frame]:
             self.shots_due.remove(due)
             self.shot(due[1])
@@ -531,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
     auto = [r for r in rows if r.get("type") == "chat" and r.get("direction") == "auto"]
     replies = session.talk.replies if session.talk else []
     panel = [line for line in tee.lines if line.startswith("[demo] Samantha changed")]
-    checks = {"Samantha raised a flag by herself": session.flag_frame is not None,
+    checks = {"Samantha raised a finding by herself": session.flag_frame is not None,
               "the game saw a live change (no restart)": bool(session.changes),
               "the panel and the terminal showed the change": bool(panel)}
     if args.wait:
@@ -545,7 +550,8 @@ def main(argv: list[str] | None = None) -> int:
         "frames": session.frame, "first_unmet_frame": session.first_unmet,
         "flag_frame": session.flag_frame, "changes": session.changes,
         "autonomous_turns": len(auto), "panel_lines": panel,
-        "flags": [r.get("summary") for r in rows if r.get("type") == "flag"],
+        "findings": [f"{r.get('type')}: {r.get('summary') or r.get('body') or ''}"
+                     for r in rows if r.get("type") in ("flag", "question", "proposal")],
         "replies_out": [r.get("text") for r in rows if r.get("type") == "chat"
                         and r.get("direction") == "out"],
     }
