@@ -362,6 +362,11 @@ a key. `RUN_EXAMPLE_STORIES=1` runs them (about 1 minute).
 - macOS and Linux. Windows is not tested.
 - macOS: a window that a terminal opens does not always get the keyboard. If P
   does nothing in the game, click the game window, then press P.
+- The training demo's window uses matplotlib's GUI backend (macOS: `macosx`;
+  Linux: Tk, which needs tkinter, for example `sudo apt install python3-tk`).
+  With no GUI backend or no display, the demo says so and writes only
+  `examples/training-run/out/curves.png`. Close the window or press Ctrl-C to
+  stop.
 - `multiprocessing` workers (spawn or forkserver, also PyTorch DataLoader
   workers) import your `__main__` again but do not start a resident, unless
   `SAMANTHA_ARM_CHILDREN=1`.

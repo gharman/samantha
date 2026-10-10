@@ -366,8 +366,9 @@ def train(args: argparse.Namespace) -> dict:
         else:
             stop.wait(remaining)
     if plot and plot.window and not stop.is_set() and not plot.closed():
-        print("all rounds done; close the plot window to exit", flush=True)
-        plot.plt.show()
+        print("all rounds done; close the plot window (or press Ctrl-C) to exit", flush=True)
+        while not stop.is_set() and not plot.closed():
+            plot.plt.pause(0.1)  # keeps the window alive; Ctrl-C sets stop
     return history
 
 
