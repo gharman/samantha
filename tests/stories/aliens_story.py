@@ -3,9 +3,11 @@ at the game, and (by default) a scripted model on 127.0.0.1. Only the tests and
 the maintainers use it; the demo itself is `python demo.py aliens`.
 
 All else is the real thing: examples/aliens/play.py (the panel) runs
-game/aliens.py, and the real Samantha reads the game, watches its output, wakes
-on the unmet goal, and (SAMANTHA_AUTONOMY=goal) changes the game's knobs by
-herself in the running process.
+game/aliens.py with demo.py's settings, and the real Samantha reads the game,
+plans her first move, applies it at the first hit (SAMANTHA_AUTONOMY_TRIGGER),
+wakes on the unmet goal, and (SAMANTHA_AUTONOMY=goal) changes the game's knobs
+by herself in the running process. The summary has the time from the first hit
+to the first change.
 
   python aliens_story.py --headless            # about 30 s, scripted model
   python aliens_story.py --headless --live     # the real model: OPENAI_API_KEY and
@@ -42,7 +44,11 @@ GOAL = "the player should be hit less than once per minute"
 
 # --- the scripted model ------------------------------------------------------
 
-CHANGE = {"BOMB_ODDS": 600, "Bomb.speed": 3, "MAX_SHOTS": 8}
+# The first move (planned at startup, applied at the first hit), then the next
+# stage at each later autonomous turn or "help", until every stage is in place.
+STAGES = [{"BOMB_ODDS": 300}, {"BOMB_ODDS": 600, "Bomb.speed": 3, "MAX_SHOTS": 8}]
+CHANGE = STAGES[-1]
+PREPARE_WORDS = r"plan your first move now"
 ADVICE = (f"{LABEL} The player is far from the goal: goal.met stays 0, and the game "
           "prints about 6 hits per minute against a goal of under 1. Most hits are "
           "bombs. I suggest three changes, each to the easy end of its range: "
@@ -83,10 +89,20 @@ def wake(event: dict[str, Any]) -> dict[str, Any]:
     }]}
 
 
-def knob_paths(context: dict[str, Any]) -> dict[str, str]:
-    """CHANGE keys to the declared knob paths (samantha.expose in the game)."""
+def knob_paths(context: dict[str, Any], change: dict[str, Any]) -> dict[str, str]:
+    """The keys of change to the declared knob paths (samantha.expose in the game)."""
     declared = {k.get("path", "") for k in context.get("declared_knobs") or []}
-    return {key: f"exposed:{key}" for key in CHANGE if f"exposed:{key}" in declared}
+    return {key: f"exposed:{key}" for key in change if f"exposed:{key}" in declared}
+
+
+def next_stage(context: dict[str, Any]) -> dict[str, Any] | None:
+    """The stage after the last one in place (declared_knobs show the values);
+    None when the last stage is in place."""
+    now = {k.get("path", ""): k.get("preview") for k in context.get("declared_knobs") or []}
+    for index in range(len(STAGES) - 1, -1, -1):
+        if all(now.get(f"exposed:{key}") == repr(value) for key, value in STAGES[index].items()):
+            return STAGES[index + 1] if index + 1 < len(STAGES) else None
+    return STAGES[0]
 
 
 def _op(op: str, path: str, effect: str, **extra: Any) -> dict[str, Any]:
@@ -100,24 +116,30 @@ def plan(context: dict[str, Any]) -> dict[str, Any]:
     request = str(context.get("operator_request", ""))
     prior = context.get("prior_tool_results") or []
     base = {"done": True, "lifetime": "process"}
+    preparing = bool(re.search(PREPARE_WORDS, request, re.I))
     if re.search(ADVICE_WORDS, request, re.I):
         return {**base, "intent": "converse", "operations": [], "reply": ADVICE}
-    if not re.search(ACT_WORDS, request, re.I):
+    if not preparing and not re.search(ACT_WORDS + r"|miss pattern", request, re.I):
         return {**base, "intent": "converse", "operations": [],
                 "reply": f"{LABEL} I can make the game easier. Say help."}
     failures = [r for step in prior for r in step["results"] if not r["ok"]]
     if failures:
         return {**base, "intent": "converse", "operations": [],
                 "reply": f"{LABEL} Nothing changed: {failures[0]['detail']}."}
-    paths = knob_paths(context)
-    if len(paths) < len(CHANGE):
-        missing = sorted(set(CHANGE) - set(paths))
+    change = STAGES[0] if preparing else next_stage(context)
+    if change is None:
+        return {**base, "intent": "converse", "operations": [],
+                "reply": f"{LABEL} Nothing left to change: every knob I use is at its easy end."}
+    paths = knob_paths(context, change)
+    if len(paths) < len(change):
+        missing = sorted(set(change) - set(paths))
         return {**base, "intent": "converse", "operations": [],
                 "reply": f"{LABEL} I could not find {missing}."}
     ops = [_op("set", paths[key], "write", value_json=json.dumps(value))
-           for key, value in CHANGE.items()]
+           for key, value in change.items()]
+    said = ", ".join(f"{key} {value}" for key, value in change.items())
     return {**base, "intent": "act", "operations": ops,
-            "reply": f"{LABEL} Making the game easier: BOMB_ODDS 600, Bomb.speed 3, MAX_SHOTS 8."}
+            "reply": f"{LABEL} Making the game easier: {said}."}
 
 
 def chat(content: str) -> str:
@@ -158,14 +180,28 @@ def self_test() -> int:
     assert text("samantha_wake", hit)["actions"] == []
     gap = 'x{"event": "gap", "evidence": {"series": "goal.met", "value": 0.0, "reference": 1.0}}'
     assert text("samantha_wake", gap)["actions"][0]["type"] == "flag"
-    declared = [{"path": f"exposed:{k}"} for k in CHANGE]
+    defaults = {"BOMB_ODDS": 60, "MAX_SHOTS": 2, "ALIEN_ODDS": 22, "Bomb.speed": 9,
+                "Alien.speed": 13}
+    declared = [{"path": f"exposed:{k}", "preview": repr(v)} for k, v in defaults.items()]
     ctx: dict[str, Any] = {"operator_request": "What do you suggest?", "prior_tool_results": [],
                            "declared_knobs": declared}
     assert text("samantha_runtime_plan", json.dumps(ctx))["reply"] == ADVICE
+    ctx["operator_request"] = ("Standing approval (SAMANTHA_AUTONOMY=goal): plan your first "
+                               "move now. Nothing changes now.")
+    assert {o["path"]: o["value_json"] for o in plan(ctx)["operations"]} == {
+        "exposed:BOMB_ODDS": "300"}
     ctx["operator_request"] = ("Standing approval (SAMANTHA_AUTONOMY=goal): goal.met is 0.0, "
                                "below its target 1.0. ... apply it now.")
     assert {o["path"]: o["value_json"] for o in plan(ctx)["operations"]} == {
+        "exposed:BOMB_ODDS": "300"}
+    declared[0]["preview"] = "300"  # the first move is in place: the next stage
+    ctx["operator_request"] = "Standing approval: ... the operator's miss pattern ..."
+    assert {o["path"]: o["value_json"] for o in plan(ctx)["operations"]} == {
         "exposed:BOMB_ODDS": "600", "exposed:MAX_SHOTS": "8", "exposed:Bomb.speed": "3"}
+    for item in declared:
+        name = item["path"].removeprefix("exposed:")
+        item["preview"] = repr(CHANGE.get(name, defaults[name]))
+    assert plan(ctx)["operations"] == [] and "Nothing left" in plan(ctx)["reply"]
     ctx["prior_tool_results"] = [{"results": [{"op": "set", "ok": False, "detail": "bounds"}]}]
     assert "bounds" in plan(ctx)["reply"]
     assert parse_press("0:p") == (0, "p") and parse_press("200:text-p") == (200, "text-p")
@@ -265,10 +301,12 @@ def knob_values(module) -> dict[str, float]:
 
 
 def samantha_ready() -> bool:
-    """True when Samantha has read the game (or is off): the game says "Press P"."""
+    """True when Samantha has read the game and planned her first move (or is
+    off): the game says "Press P"."""
     module = sys.modules.get("samantha")
     cog = getattr(module.resident(), "cognition", None) if module else None
-    return cog is None or cog.provider_ready is False or cog.analysis_ready is not None
+    return cog is None or cog.provider_ready is False or (
+        cog.analysis_ready is not None and not cog.preparing)
 
 
 class Session:
@@ -282,6 +320,7 @@ class Session:
         self.last_press = 0.0
         self.calls = 0
         self.hits: list[int] = []
+        self.hit_times: list[float] = []  # time.monotonic() of each hit
         self.seen: dict[str, float] | None = None
         self.changes: list[dict[str, Any]] = []
         self.play_started: float | None = None
@@ -320,26 +359,39 @@ class Session:
         say(f"frame {self.frame:05d}  screenshot {path}")
 
     def on_tick(self, main_locals: dict) -> None:
+        now = time.monotonic()
         if self.frame == 0:
-            self.play_started = time.monotonic()
+            self.play_started = now
         self.frame += 1
+        # Hits first: the game prints "player hit" (and Samantha sees it) before
+        # this tick, so a change seen in this tick comes after the hit.
+        self.hits = main_locals.get("hits") or []  # the game's list of hit frames
+        while len(self.hit_times) < len(self.hits):
+            self.hit_times.append(now)
+            if len(self.hit_times) == 1:
+                say(f"frame {self.frame:05d}  first hit")
         module = sys.modules["__main__"]
         values = knob_values(module)
         if self.seen is None:
             self.seen = values
         if values != self.seen:
             moved = {k: (self.seen[k], v) for k, v in values.items() if v != self.seen[k]}
-            seconds = time.monotonic() - (self.play_started or time.monotonic())
-            self.changes.append({"frame": self.frame, "play_s": round(self.frame / 40, 1),
-                                 "wall_s": round(seconds, 1), "moved": moved})
+            seconds = now - (self.play_started or now)
+            change = {"frame": self.frame, "play_s": round(self.frame / 40, 1),
+                      "wall_s": round(seconds, 1), "moved": moved}
+            if self.hit_times:  # wall seconds since the first hit and since the last hit
+                change["after_first_hit_s"] = round(now - self.hit_times[0], 2)
+                change["after_last_hit_s"] = round(now - self.hit_times[-1], 2)
+            self.changes.append(change)
             for k, (old, new) in moved.items():
-                say(f"frame {self.frame:05d}  {k} changed live: {old:g} → {new:g}")
-            if len(self.changes) == 1:
-                self.stop_at = self.frame + self.args.after
+                say(f"frame {self.frame:05d}  {k} changed live: {old:g} → {new:g}"
+                    + (f" ({change['after_first_hit_s']:.2f} s after the first hit, "
+                       f"{change['after_last_hit_s']:.2f} s after the last hit)"
+                       if self.hit_times else " (no hit yet)"))
+            self.stop_at = self.frame + self.args.after  # play on after each change
             self.shots_due.append((self.frame + self.args.shot_delay,
                                    f"after-change-{len(self.changes)}"))
             self.seen = values
-        self.hits = main_locals.get("hits") or []  # the game's list of hit frames
         if self.frame % 80 == 0:
             minutes = min(self.frame, 2400) / 2400
             rate = len([f for f in self.hits if f > self.frame - 2400]) / minutes
@@ -366,6 +418,8 @@ class Session:
             self.talk.maybe_start()
         if self.bot:
             self.bot.step()
+        if self.args.max_frames and self.frame == self.args.max_frames:
+            self.stop_at = self.frame
         if self.stop_at and self.frame >= self.stop_at:
             self.shot("last")
             self.pg.event.post(self.pg.event.Event(self.pg.QUIT))
@@ -437,10 +491,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--talk-at", type=int, default=4800, metavar="FRAME",
                    help="type at Samantha's first flag, or at this frame (default 4800)")
     p.add_argument("--after", type=int, default=2400, metavar="FRAMES",
-                   help="frames to play after the first change (default 2400, 1 min)")
+                   help="frames to play after the last change (default 2400, 1 min)")
     p.add_argument("--frames", type=int, default=0,
                    help="stop after this many frames if no change stops it first "
                         "(default 2400 with --samantha off, else 9600)")
+    p.add_argument("--max-frames", type=int, default=0,
+                   help="stop after this many frames of play in any case (0: no limit)")
     p.add_argument("--no-bot", action="store_true", help="no scripted player")
     p.add_argument("--press", type=parse_press, action="append", metavar="FRAME:KEY",
                    help=f"post a key press at FRAME (0: the start screen); KEY: {', '.join(KEYS)}."
@@ -456,6 +512,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="frames after the first change for the after-change screenshot")
     p.add_argument("--summary", default=None, metavar="FILE",
                    help="write the measured timeline as JSON to FILE")
+    p.add_argument("--max-latency", type=float, default=5.0, metavar="S",
+                   help="the most wall seconds from the first hit to the first change "
+                        "(default 5)")
     args = p.parse_args(argv)
     if args.self_test:
         return self_test()
@@ -474,10 +533,19 @@ def main(argv: list[str] | None = None) -> int:
     server = None
     state = Path(args.out) / f"state-{time.strftime('%Y%m%d-%H%M%S')}"
     if args.samantha != "off":
-        # As demo.py: no SAMANTHA_GOAL; the goal is the game's '# daemon: goal' line.
+        # demo.py's settings (the environment wins, as in demo.py). As demo.py:
+        # no SAMANTHA_GOAL; the goal is the game's '# daemon: goal' line.
+        sys.path.insert(0, str(REPO))
+        try:
+            from demo import settings
+        finally:
+            sys.path.remove(str(REPO))
+        demo = settings("aliens", args.wait)
+        del demo["SAMANTHA"]  # --samantha sets it
         os.environ.update(SAMANTHA_STATE_DIR=str(state),
-                          SAMANTHA_AUTONOMY="off" if args.wait else "goal")
-        os.environ.setdefault("SAMANTHA_AUTONOMY_DWELL", "90")  # as demo.py
+                          SAMANTHA_AUTONOMY=demo.pop("SAMANTHA_AUTONOMY"))
+        for key, value in demo.items():
+            os.environ.setdefault(key, value)
         if not args.live:
             server = serve(respond)
             os.environ.update(scripted_env(server))
@@ -536,18 +604,32 @@ def main(argv: list[str] | None = None) -> int:
     auto = [r for r in rows if r.get("type") == "chat" and r.get("direction") == "auto"]
     replies = session.talk.replies if session.talk else []
     panel = [line for line in tee.lines if line.startswith("[demo] Samantha changed")]
-    checks = {"Samantha raised a finding by herself": session.flag_frame is not None,
-              "the game saw a live change (no restart)": bool(session.changes),
+    checks = {"the game saw a live change (no restart)": bool(session.changes),
               "the panel and the terminal showed the change": bool(panel)}
+    # Her finding comes from the gap wake, about 50 s of play after the first hit.
+    # A live run with miss lines can stop before that (--max-frames).
+    misses = bool(os.environ.get("SAMANTHA_AUTONOMY_TRIGGER")) and not args.wait
+    if not (misses and args.live):
+        checks["Samantha raised a finding by herself"] = session.flag_frame is not None
     if args.wait:
         checks["Samantha answered"] = bool(replies)
         checks["the reply has an intervention receipt"] = any(
             "Applied runtime intervention" in r for r in replies)
     else:
         checks["Samantha changed the game by herself (no chat)"] = bool(auto) and not replies
+        first = session.changes[0] if session.changes else {}
+        checks["no change before the first hit"] = all(
+            "after_first_hit_s" in change for change in session.changes)
+        latency = first.get("after_first_hit_s")
+        checks[f"the first change came at most {args.max_latency:g} s after the first hit"] = (
+            latency is not None and latency <= args.max_latency)
+    first_hit = session.hits[0] if session.hits else None
     summary: dict[str, Any] = {
         "model": "live" if args.live else "scripted", "fps": args.fps, "seed": args.seed,
         "frames": session.frame, "first_unmet_frame": session.first_unmet,
+        "first_hit_frame": first_hit, "hits": len(session.hits),
+        "first_change_after_first_hit_s": (session.changes[0].get("after_first_hit_s")
+                                           if session.changes else None),
         "flag_frame": session.flag_frame, "changes": session.changes,
         "autonomous_turns": len(auto), "panel_lines": panel,
         "findings": [f"{r.get('type')}: {r.get('summary') or r.get('body') or ''}"
@@ -557,15 +639,20 @@ def main(argv: list[str] | None = None) -> int:
     }
     if session.changes:
         # The hit frames come from the game; it counts frames only in play.
-        at, end = session.changes[0]["frame"], session.frame
+        # Before her first change, and after her last change.
+        at, last, end = session.changes[0]["frame"], session.changes[-1]["frame"], session.frame
         before = sum(f < at for f in session.hits) / (at / 2400)
-        after = sum(f >= at for f in session.hits) / max((end - at) / 2400, 1e-9)
+        after = sum(f >= last for f in session.hits) / max((end - last) / 2400, 1e-9)
         summary.update(hits_per_min_before=round(before, 2), hits_per_min_after=round(after, 2))
-        say(f"first change at frame {at} ({at / 40:.0f} s of play); hits per minute: "
-            f"{before:.1f} before, {after:.1f} after; goal met after the change: "
+        latency = session.changes[0].get("after_first_hit_s")
+        say(f"first change at frame {at} ({at / 40:.0f} s of play"
+            + (f", {latency:.2f} s after the first hit" if latency is not None else "")
+            + f"); {len(session.changes)} change(s); hits per minute: {before:.1f} before the "
+            f"first, {after:.1f} after the last; goal met after the first change: "
             f"{'yes' if 1 in session.goal_after else 'not yet'}")
         if not args.live:
-            checks["the player is hit at most half as often after the change"] = after <= before / 2
+            checks["the player is hit at most half as often after her changes"] = (
+                after <= before / 2)
     summary["checks"] = checks
     if args.summary:
         Path(args.summary).write_text(json.dumps(summary, indent=2, default=str))

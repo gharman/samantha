@@ -4,7 +4,10 @@
     python demo.py training    a small training run: Samantha fixes a starved region
 
 Samantha runs in act mode and acts by herself when a goal stays unmet
-(SAMANTHA_AUTONOMY=goal; another try every 90 s while it stays unmet).
+(SAMANTHA_AUTONOMY=goal; another try every 90 s while it stays unmet). In the
+aliens demo, a hit is a miss against the goal (SAMANTHA_AUTONOMY_TRIGGER): she
+plans her first move before you press P, applies it at your first hit, and
+makes another change at most every 10 s while the hits continue.
 Add --wait to make her wait for you: then talk to her with `samantha` in a
 second terminal. The OpenAI key comes from .env in this directory or from the
 environment (the environment wins). See README.md.
@@ -25,6 +28,24 @@ DEMOS = {
                   "--out", "examples/training-run/out"], ["numpy", "matplotlib"]),
 }
 INSTALL = 'python -m pip install -e ".[demos]"'
+# Settings for one demo, when Samantha acts by herself (not with --wait). The
+# environment wins. Aliens: the game prints "player hit · deaths: N · score: S"
+# at each hit; that line is a miss against the goal, so she acts at the first
+# hit, not after the hit rate has been over the goal for a minute.
+AUTONOMY = {
+    "aliens": {"SAMANTHA_AUTONOMY_TRIGGER": r"^player hit\b",
+               "SAMANTHA_AUTONOMY_TRIGGER_DWELL": "10"},
+}
+
+
+def settings(demo: str, wait: bool = False) -> dict[str, str]:
+    """The Samantha settings of a demo (the story tests use them too)."""
+    values = {"SAMANTHA": "act", "SAMANTHA_AUTONOMY": "off" if wait else "goal",
+              # A change that falls short gets another try within the demo (default 600 s).
+              "SAMANTHA_AUTONOMY_DWELL": "90"}
+    if not wait:
+        values.update(AUTONOMY.get(demo, {}))
+    return values
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,10 +77,12 @@ def main(argv: list[str] | None = None) -> int:
         print("  cp .env.example .env      # then edit .env: OPENAI_API_KEY=sk-...")
         print("or set it for this shell:  export OPENAI_API_KEY=sk-...")
         return 2
-    child.update(SAMANTHA="act", SAMANTHA_AUTONOMY="off" if args.wait else "goal",
-                 PYGAME_HIDE_SUPPORT_PROMPT="1")
-    # A change that falls short gets another try within the demo (default 600 s).
-    child.setdefault("SAMANTHA_AUTONOMY_DWELL", "90")
+    for key, value in settings(args.demo, args.wait).items():
+        if key in ("SAMANTHA", "SAMANTHA_AUTONOMY"):
+            child[key] = value
+        else:
+            child.setdefault(key, value)
+    child["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
     command = [sys.executable, *script]
     os.execve(sys.executable, command, child)
     return 0  # not reached

@@ -3,7 +3,8 @@
 `python demo.py aliens` runs this file. It runs game/aliens.py, unchanged, as
 __main__, and adds a strip under the game that shows:
 
-- Samantha's state (starting, reading the game, watching, or off),
+- Samantha's state (starting, reading the game, planning her first move,
+  watching, or off),
 - what she says by herself (her flags, questions, and proposals),
 - each change she makes to the game, with the old and the new value.
 
@@ -90,6 +91,11 @@ class SamanthaLog(logging.Handler):
         if kind in self.LABELS and text:
             self.feed.add("say", f"{self.LABELS[kind]}: {text}")
         elif kind == "acted":
+            if not text.startswith("Applied runtime intervention"):
+                # A turn that changed nothing: say why (for example, every knob
+                # is already at its easy end).
+                self.feed.add("say", f"Samantha: {text}")
+                return
             # The knob watcher shows the knobs with their old values; show
             # only other changed paths from Samantha's receipt here.
             for line in text.splitlines():
@@ -119,7 +125,11 @@ def samantha_status() -> tuple[str, str]:
         return "status", "is starting..."
     if cog.analysis_ready is None:
         return "status", "is reading the game (about 20 s)..."
+    if cog.preparing:
+        return "status", "is planning her first move..."
     autonomous = current.config.mode == "act" and current.config.autonomy == "goal"
+    if autonomous and getattr(current.config, "autonomy_trigger", None):
+        return "status", "is watching. She steps in when you get hit."
     if autonomous:
         return "status", "is watching. She steps in when you keep getting hit."
     return "status", "is watching. Talk to her: run samantha in a second terminal."

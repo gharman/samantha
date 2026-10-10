@@ -7,6 +7,7 @@ RUN_EXAMPLE_STORIES=1.
 """
 
 import importlib.util
+import json
 import logging
 import os
 import re
@@ -78,6 +79,23 @@ def test_demo_help_lists_both_demos(tmp_path: Path) -> None:
     assert "--wait" in result.stdout
 
 
+def test_demo_settings_act_on_hits_only_in_the_aliens_demo() -> None:
+    sys.path.insert(0, str(REPO))
+    try:
+        import demo
+    finally:
+        sys.path.remove(str(REPO))
+    aliens = demo.settings("aliens")
+    assert aliens["SAMANTHA_AUTONOMY"] == "goal"
+    assert re.search(aliens["SAMANTHA_AUTONOMY_TRIGGER"], "player hit · deaths: 1 · score: 0")
+    assert not re.search(aliens["SAMANTHA_AUTONOMY_TRIGGER"], "0.0 hits per minute · goal met: 1")
+    assert aliens["SAMANTHA_AUTONOMY_TRIGGER_DWELL"] == "10"
+    # --wait (she acts only when asked) and the training demo: no miss lines.
+    assert "SAMANTHA_AUTONOMY_TRIGGER" not in demo.settings("aliens", wait=True)
+    assert demo.settings("training") == {"SAMANTHA": "act", "SAMANTHA_AUTONOMY": "goal",
+                                         "SAMANTHA_AUTONOMY_DWELL": "90"}
+
+
 def test_env_example_has_the_key_name_and_no_key(tmp_path: Path) -> None:
     text = (REPO / ".env.example").read_text()
     assert re.search(r"^OPENAI_API_KEY=$", text, re.M)
@@ -138,10 +156,13 @@ def test_panel_reads_samantha_lines() -> None:
         "✓ set frame:1:main:6::lastalien/facing: assignment verified → -8")
     log("resident armed · mode=act")
     log("autonomous act turn failed: boom", logging.WARNING)
+    log("acted: No safe change applied: every knob is at its most protective bound.")
     assert feed.snapshot() == [
         ("say", "Samantha: The player is hit 6 times per minute."),
         ("change", "Samantha set lastalien.facing -> -8"),
         ("error", "Samantha: autonomous act turn failed: boom"),
+        ("say", "Samantha: No safe change applied: every knob is at its most protective "
+                "bound."),
     ]
 
 
@@ -171,13 +192,24 @@ stories = pytest.mark.skipif(os.getenv("RUN_EXAMPLE_STORIES") != "1",
 
 
 @stories
-def test_aliens_story_samantha_acts_by_herself(tmp_path: Path) -> None:
+def test_aliens_story_samantha_acts_at_the_first_hit(tmp_path: Path) -> None:
+    """The first move is planned before P; the first hit applies it at once."""
     _needs("pygame")
+    summary = tmp_path / "summary.json"
     result = _run(STORIES, ["aliens_story.py", "--headless", "--quiet", "--out",
-                            str(tmp_path / "out")], tmp_path, timeout=600)
+                            str(tmp_path / "out"), "--summary", str(summary),
+                            "--max-latency", "2"], tmp_path, timeout=600)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "FAIL" not in result.stdout
-    assert "[demo] Samantha changed BOMB_ODDS: 60 → 600" in result.stdout
+    assert "first move ready: BOMB_ODDS 60 → 300" in result.stderr  # a [samantha] line
+    assert "[demo] Samantha changed BOMB_ODDS: 60 → 300" in result.stdout
+    data = json.loads(summary.read_text())
+    first = data["changes"][0]
+    assert first["moved"] == {"BOMB_ODDS": [60, 300]}
+    # Quiet until the first hit, then the change within 2 s (no model call).
+    assert data["checks"]["no change before the first hit"]
+    assert 0 <= data["first_change_after_first_hit_s"] <= 2
+    assert first["frame"] >= data["first_hit_frame"]
 
 
 @stories
