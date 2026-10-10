@@ -8,8 +8,9 @@ its sampling weight, so sampling_weights is how we bias generation to a corner.
 Training runs in rounds. Each round takes a fixed number of optimizer steps,
 then measures loss and fidelity (how closely the student tracks the teacher;
 1.0 is exact) per region on fixed probe sets. Each round prints those numbers
-and redraws out/curves.png. The generator reads sampling_weights again at the
-start of every round, so a change takes effect at the next round.
+and redraws out/curves.png (and a live window with --window). The generator
+reads sampling_weights again at the start of every round, so a change takes
+effect at the next round.
 """
 
 import samantha
@@ -20,10 +21,12 @@ import samantha
 
 import argparse
 import json
+import logging
 import os
 import signal
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -49,6 +52,24 @@ class SamplingWeights:
 
 
 sampling_weights = SamplingWeights()
+
+
+class SamanthaSaid(logging.Handler):
+    """Keep Samantha's flags, questions, and proposals for the plot."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.INFO)
+        self.lines: deque[str] = deque(maxlen=3)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        kind, _, text = record.getMessage().partition(": ")
+        if kind in ("flag", "question", "proposal") and text:
+            self.lines.append(f"Samantha ({kind}): {' '.join(text.split())}")
+
+
+said = SamanthaSaid()
+if logging.getLogger("samantha").handlers:  # Samantha armed (else she logs nothing)
+    logging.getLogger("samantha").addHandler(said)
 
 
 def teacher(x: np.ndarray) -> np.ndarray:
@@ -163,55 +184,100 @@ def evaluate(student: Student, probes: dict) -> dict[str, dict[str, float]]:
     return result
 
 
-def plot(history: dict, path: Path) -> None:
-    """Redraw the per-region curves; replace the PNG in one step."""
-    import matplotlib
+class Plot:
+    """The per-region curves: out/curves.png each round, and a live window with
+    --window (when there is a display). Samantha's changes are marked, and her
+    last messages are under the curves."""
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
+    NOT_GUI = {"agg", "pdf", "ps", "svg", "cairo", "pgf", "template"}
 
-    colors = {"common": "#4C72B0", "edge": "#55A868", "rare": "#C44E52"}
-    rounds = history["round"]
-    fig, (top, bottom) = plt.subplots(2, 1, figsize=(12.8, 7.2), sharex=True)
-    for region in REGIONS:
-        top.plot(rounds, history["loss_by_region"][region], color=colors[region], lw=2.2)
-        bottom.plot(rounds, history["fidelity"][region], color=colors[region], lw=2.2)
-    top.plot(rounds, history["loss"], color="black", ls="--", lw=1.6)
-    top.set_yscale("log")
-    top.set_ylabel("loss per region\n(MSE, log scale)")
-    bottom.axhline(TARGET, color="gray", ls=":", lw=1.5)
-    bottom.set_ylim(0.0, 1.02)
-    bottom.set_ylabel("fidelity per region\n(1.0 = exact)")
-    bottom.set_xlabel("round")
-    handles = [Line2D([], [], color=colors[r], lw=2.2, label=r) for r in REGIONS] + [
-        Line2D([], [], color="black", ls="--", lw=1.6,
-               label="total loss (the number you usually watch)"),
-        Line2D([], [], color="gray", ls=":", lw=1.5, label=f"fidelity target {TARGET}"),
-    ]
-    fig.legend(handles=handles, loc="upper center", ncol=5, frameon=False, fontsize=11,
-               bbox_to_anchor=(0.5, 0.945))
-    for change in history["changes"]:
-        for ax in (top, bottom):
-            ax.axvline(change["round"], color="#8172B2", lw=1.8)
-        moved = [f"{r} {change['from'][r]:g} → {change['to'][r]:g}" for r in REGIONS
-                 if change["from"][r] != change["to"][r]]
-        label = "sampling_weights " + ", ".join(moved)
-        label += " (rehearsal)" if change.get("rehearsal") else " (live, no restart)"
-        top.annotate(label, xy=(change["round"], 1.0), xycoords=("data", "axes fraction"),
-                     xytext=(6, -16), textcoords="offset points", color="#8172B2",
-                     fontsize=11, fontweight="bold")
-    now = history["weights"][-1]
-    fig.suptitle(
-        f"distill · round {rounds[-1]} · sampling_weights: "
-        + ", ".join(f"{r}={now[r]:g}" for r in REGIONS),
-        fontsize=14, y=0.985,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.935))
-    tmp = path.with_suffix(".tmp.png")
-    fig.savefig(tmp, dpi=150)
-    plt.close(fig)
-    os.replace(tmp, path)
+    def __init__(self, path: Path, window: bool) -> None:
+        import matplotlib
+
+        if not window:
+            matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        self.plt, self.path = plt, path
+        self.window = window and matplotlib.get_backend().lower() not in self.NOT_GUI
+        if window and not self.window:
+            print(f"No display for a plot window; the plot is {path}", flush=True)
+        self.fig, (self.top, self.bottom) = plt.subplots(2, 1, figsize=(12.8, 7.2),
+                                                         sharex=True)
+        if self.window:
+            self.fig.canvas.manager.set_window_title("distill: Samantha watches this run")
+            plt.show(block=False)
+
+    def closed(self) -> bool:
+        return self.window and not self.plt.fignum_exists(self.fig.number)
+
+    def wait(self, seconds: float, stop: threading.Event) -> None:
+        """Wait between rounds; with a window, keep it responsive."""
+        if not self.window:
+            stop.wait(seconds)
+            return
+        end = time.monotonic() + seconds
+        while not stop.is_set() and not self.closed() and time.monotonic() < end:
+            self.plt.pause(min(0.05, max(0.001, end - time.monotonic())))
+
+    def draw(self, history: dict, messages: list[str]) -> None:
+        from matplotlib.lines import Line2D
+
+        fig, top, bottom = self.fig, self.top, self.bottom
+        top.clear()
+        bottom.clear()
+        for text in list(fig.texts):
+            text.remove()
+        for legend in list(fig.legends):
+            legend.remove()
+        colors = {"common": "#4C72B0", "edge": "#55A868", "rare": "#C44E52"}
+        rounds = history["round"]
+        for region in REGIONS:
+            top.plot(rounds, history["loss_by_region"][region], color=colors[region], lw=2.2)
+            bottom.plot(rounds, history["fidelity"][region], color=colors[region], lw=2.2)
+        top.plot(rounds, history["loss"], color="black", ls="--", lw=1.6)
+        top.set_yscale("log")
+        top.set_ylabel("loss per region\n(MSE, log scale)")
+        bottom.axhline(TARGET, color="gray", ls=":", lw=1.5)
+        bottom.set_ylim(0.0, 1.02)
+        bottom.set_ylabel("fidelity per region\n(1.0 = exact)")
+        bottom.set_xlabel("round")
+        handles = [Line2D([], [], color=colors[r], lw=2.2, label=r) for r in REGIONS] + [
+            Line2D([], [], color="black", ls="--", lw=1.6,
+                   label="total loss (the number you usually watch)"),
+            Line2D([], [], color="gray", ls=":", lw=1.5, label=f"fidelity target {TARGET}"),
+        ]
+        fig.legend(handles=handles, loc="upper center", ncol=5, frameon=False, fontsize=11,
+                   bbox_to_anchor=(0.5, 0.945))
+        for change in history["changes"]:
+            for ax in (top, bottom):
+                ax.axvline(change["round"], color="#8172B2", lw=1.8)
+            moved = [f"{r} {change['from'][r]:g} → {change['to'][r]:g}" for r in REGIONS
+                     if change["from"][r] != change["to"][r]]
+            label = "Samantha set sampling_weights " + ", ".join(moved) + " (live, no restart)"
+            late = change["round"] > 0.5 * max(rounds[-1], 1)  # put the label left of the line
+            top.annotate(label, xy=(change["round"], 1.0), xycoords=("data", "axes fraction"),
+                         xytext=(-6 if late else 6, -16), textcoords="offset points",
+                         ha="right" if late else "left", color="#8172B2",
+                         fontsize=11, fontweight="bold")
+        now = history["weights"][-1]
+        fig.suptitle(
+            f"distill · round {rounds[-1]} · sampling_weights: "
+            + ", ".join(f"{r}={now[r]:g}" for r in REGIONS),
+            fontsize=14, y=0.985,
+        )
+        import textwrap
+
+        lines = [row for m in messages[-2:] for row in textwrap.wrap(m, 165)[:2]][-3:]
+        fig.text(0.01, 0.012, "\n".join(lines) or "Samantha: (nothing to report yet)",
+                 fontsize=10.5, color="#3b3355", va="bottom", ha="left")
+        fig.tight_layout(rect=(0, 0.075, 1, 0.935))
+        tmp = self.path.with_suffix(".tmp.png")
+        fig.savefig(tmp, dpi=150)
+        os.replace(tmp, self.path)
+        if self.window:
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
 
 
 def save_json(value: dict, path: Path) -> None:
@@ -233,10 +299,7 @@ def train(args: argparse.Namespace) -> dict:
         "loss_by_region": {r: [] for r in REGIONS},
         "fidelity": {r: [] for r in REGIONS},
     }
-    rehearsal = None
-    if args.rehearse_change:
-        at, value = args.rehearse_change.split(":")
-        rehearsal = (int(at), float(value))
+    plot = None if args.no_plot else Plot(out / "curves.png", args.window)
     seen = asdict(sampling_weights)
     round_number = 0
     stop = threading.Event()
@@ -253,8 +316,6 @@ def train(args: argparse.Namespace) -> dict:
         signal.signal(signal.SIGINT, request_stop)
     while (not args.rounds or round_number < args.rounds) and not stop.is_set():
         started = time.monotonic()
-        if rehearsal and round_number == rehearsal[0]:
-            sampling_weights.rare = rehearsal[1]
         weights = asdict(sampling_weights)  # read live, once per round
         if weights != seen:
             for region in REGIONS:
@@ -262,10 +323,7 @@ def train(args: argparse.Namespace) -> dict:
                     print(f"round {round_number:03d}  sampling_weights.{region} changed "
                           f"live: {seen[region]:g} → {weights[region]:g} (no restart)",
                           flush=True)
-            history["changes"].append({
-                "round": round_number, "from": seen, "to": weights,
-                "rehearsal": bool(rehearsal and round_number == rehearsal[0]),
-            })
+            history["changes"].append({"round": round_number, "from": seen, "to": weights})
             seen = weights
         for _ in range(args.steps):
             x, y = generator.batch(args.batch, weights)
@@ -283,11 +341,21 @@ def train(args: argparse.Namespace) -> dict:
             fidelity = "  ".join(f"fidelity/{r}: {scores[r]['fidelity']:.4f}" for r in REGIONS)
             print(f"round {round_number:03d}  loss: {total:.5f}  {losses}", flush=True)
             print(f"round {round_number:03d}  {fidelity}  (target {TARGET})", flush=True)
-        if not args.no_plot:
-            plot(history, out / "curves.png")
+        if plot:
+            plot.draw(history, list(said.lines))
         save_json(history, out / "history.json")
         round_number += 1
-        stop.wait(max(0.0, args.round_seconds - (time.monotonic() - started)))
+        remaining = max(0.0, args.round_seconds - (time.monotonic() - started))
+        if plot:
+            plot.wait(remaining, stop)
+            if plot.closed():
+                print("plot window closed; stopping", flush=True)
+                stop.set()
+        else:
+            stop.wait(remaining)
+    if plot and plot.window and not stop.is_set() and not plot.closed():
+        print("all rounds done; close the plot window to exit", flush=True)
+        plot.plt.show()
     return history
 
 
@@ -303,10 +371,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--round-seconds", type=float, default=1.0,
                    help="minimum wall time per round, so a person can follow along")
     p.add_argument("--out", default="out", help="directory for curves.png and history.json")
+    p.add_argument("--window", action="store_true",
+                   help="also show the curves in a live window (needs a display)")
     p.add_argument("--no-plot", action="store_true", help="do not draw curves.png")
     p.add_argument("--quiet", action="store_true", help="do not print per-round metrics")
-    p.add_argument("--rehearse-change", metavar="ROUND:VALUE",
-                   help="test only: set sampling_weights.rare to VALUE at ROUND by itself")
     return p
 
 

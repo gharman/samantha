@@ -1,18 +1,20 @@
-"""Run the training-run example offline, with a scripted model.
+"""The training demo as an unattended story, with a scripted model on
+127.0.0.1 (by default). Only the tests and the maintainers use it; the demo
+itself is `python demo.py training`.
 
-No API key and no network. A small server on 127.0.0.1 answers Samantha's
-model requests with fixed text that starts with "(scripted model)". All else
-is the real Samantha: it reads distill/train.py, watches its output, flags
-the starved rare region by itself, answers two chat messages ("What do you
-suggest?" and "Yes, do it."), changes sampling_weights.rare in the running
-process, and writes the change to its journal.
+All else is the real thing: distill/train.py runs with Samantha in act mode.
+She reads it, watches its output, flags the starved rare region by herself, and
+(SAMANTHA_AUTONOMY=goal) raises sampling_weights.rare in the running process.
+With --wait she changes nothing by herself, and the story types two chat lines
+("What do you suggest?", "Yes, do it.") as the samantha CLI does.
 
-  python rehearse.py               # about 30 s; the plot is out/rehearse/curves.png
-  python rehearse.py --self-test   # check the scripted model only
+  python training_story.py             # about 30 s; the plot is out/story/curves.png
+  python training_story.py --wait      # the chat path
+  python training_story.py --self-test # check the scripted model only
 
-Lines that start with "host |" are the training program's output (every
-10th round, and all Samantha lines). Lines that start with "you |" and
-"samantha |" are the chat.
+Lines that start with "host |" are the training program's output (every 10th
+round, and all Samantha lines). Lines that start with "you |" and "samantha |"
+are the chat.
 """
 
 from __future__ import annotations
@@ -28,23 +30,19 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-HERE = Path(__file__).resolve().parent
-LABEL = "(scripted model)"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from scripted import LABEL, format_name, message, scripted_env, serve  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[2]
+EXAMPLE = REPO / "examples" / "training-run"
 RARE = "exposed:sampling_weights.rare"
 CONVERSATION = ["What do you suggest?", "Yes, do it."]
+AUTONOMOUS_VALUE = 4.0
 
 # --- the scripted model ------------------------------------------------------
-
-
-def _message(text: str) -> dict[str, Any]:
-    """One Responses API payload with this output text."""
-    return {"id": "resp_scripted", "object": "response", "status": "completed",
-            "output": [{"type": "message", "role": "assistant",
-                        "content": [{"type": "output_text", "text": text}]}]}
 
 
 def cold_start() -> dict[str, Any]:
@@ -70,7 +68,7 @@ def wake(prompt: str) -> dict[str, Any]:
         return {"assessment": f"{LABEL} nothing to report", "actions": []}
     value, reference = float(evidence["value"]), float(evidence["reference"])
     return {"assessment": f"{LABEL} fidelity.rare is below target", "actions": [{
-        "type": "flag",
+        "type": "flag", "flag_id": "",
         "summary": f"{LABEL} fidelity.rare is {value:.2f}, {reference - value:.2f} below "
                    f"its {reference} target: the rare region does not meet the goal.",
         "evidence": f"gap sentinel: fidelity.rare={value}, target={reference}",
@@ -86,7 +84,7 @@ ADVICE = (f"{LABEL} fidelity/rare is flat near 0.53, far below 0.95, while commo
 
 
 def _requested_value(text: str) -> float | None:
-    match = re.search(r"\bto\s+(\d+(?:\.\d+)?)", text) or re.search(r"(\d+(?:\.\d+)?)", text)
+    match = re.search(r"\bto\s+(\d+(?:\.\d+)?)", text)
     return float(match.group(1)) if match else None
 
 
@@ -112,16 +110,19 @@ def plan(context: dict[str, Any]) -> dict[str, Any]:
         detail = failure["detail"] if failure else "no change was needed"
         return {**base, "intent": "converse", "operations": [],
                 "reply": f"{LABEL} Nothing changed: {detail}."}
-    value = _requested_value(request)
-    if value is None and re.search(r"\b(yes|do it|go ahead|ok|apply)\b", request, re.I):
-        value = _advised_value(context)
+    if request.startswith("Standing approval"):
+        value = AUTONOMOUS_VALUE if "fidelity.rare" in request else None
+    else:
+        value = _requested_value(request)
+        if value is None and re.search(r"\b(yes|do it|go ahead|ok|apply)\b", request, re.I):
+            value = _advised_value(context)
     if value is None:
         return {**base, "intent": "converse", "operations": [],
                 "reply": f"{LABEL} Which value should sampling_weights.rare take (0.1-5.0)?"}
     op = {"op": "set", "effect": "write", "path": RARE, "query": None,
           "value_json": json.dumps(value), "args_json": None, "kwargs_json": None,
           "lifetime": "process", "duration_s": None,
-          "reason": "the operator approved a higher sampling weight for the rare region"}
+          "reason": "the rare region gets no training points at weight 1.0"}
     return {**base, "intent": "act", "operations": [op],
             "reply": f"{LABEL} Setting sampling_weights.rare to {value:g}."}
 
@@ -141,52 +142,15 @@ def chat(content: str) -> str:
 
 
 def respond(body: dict[str, Any]) -> dict[str, Any]:
-    """The Responses API payload for one request body."""
-    fmt = ((body.get("text") or {}).get("format") or {}).get("name")
+    fmt = format_name(body)
     content = str(body["input"][-1]["content"])
     if fmt == "samantha_cold_start_analysis":
-        return _message(json.dumps(cold_start()))
+        return message(json.dumps(cold_start()))
     if fmt == "samantha_wake":
-        return _message(json.dumps(wake(content)))
+        return message(json.dumps(wake(content)))
     if fmt == "samantha_runtime_plan":
-        return _message(json.dumps(plan(json.loads(content))))
-    return _message(chat(content))
-
-
-class Handler(BaseHTTPRequestHandler):
-    def _send(self, code: int, payload: dict[str, Any]) -> None:
-        data = json.dumps(payload).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_GET(self) -> None:  # noqa: N802
-        if self.path.startswith("/v1/models/"):
-            self._send(200, {"id": self.path.rsplit("/", 1)[-1], "object": "model"})
-        else:
-            self._send(404, {"error": {"message": "not found"}})
-
-    def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/v1/responses":
-            self._send(404, {"error": {"message": "not found"}})
-            return
-        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-        try:
-            self._send(200, respond(body))
-        except Exception as exc:
-            self._send(500, {"error": {"message": f"scripted model: {exc!r}"}})
-
-    def log_message(self, *args: Any) -> None:
-        pass
-
-
-def serve() -> ThreadingHTTPServer:
-    """Start the scripted model on a free local port, on a daemon thread."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, name="scripted-model", daemon=True).start()
-    return server
+        return message(json.dumps(plan(json.loads(content))))
+    return message(chat(content))
 
 
 def self_test() -> int:
@@ -204,11 +168,15 @@ def self_test() -> int:
     yes = {"operator_request": "Yes, do it.", "prior_tool_results": [],
            "recent_chat": [{"direction": "out", "text": json.dumps({"reply": ADVICE})}]}
     assert plan(yes)["operations"][0]["value_json"] == "4.0"
+    auto = {"operator_request": "Standing approval (SAMANTHA_AUTONOMY=goal): fidelity.rare "
+                                "is 0.5375, below its target 0.95. ... apply it now.",
+            "prior_tool_results": []}
+    assert plan(auto)["operations"][0]["value_json"] == "4.0"
     nine = {"operator_request": "Now set sampling_weights.rare to 9.", "prior_tool_results": []}
     assert plan(nine)["operations"][0]["value_json"] == "9.0"
     nine["prior_tool_results"] = [{"results": [{"ok": False, "detail": "outside bounds"}]}]
     assert "outside bounds" in plan(nine)["reply"]
-    print("rehearse self-test: PASS")
+    print("story self-test: PASS")
     return 0
 
 
@@ -261,7 +229,7 @@ def talk(pid: int, lines: list[str]) -> list[str]:
 
     replies = []
     with socket.socket(socket.AF_UNIX) as conn:
-        conn.settimeout(120)
+        conn.settimeout(300)
         conn.connect(str(runtime_dir() / f"{pid}.sock"))
         incoming = conn.makefile("rb")
         incoming.readline()  # hello
@@ -281,12 +249,18 @@ def talk(pid: int, lines: list[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--self-test", action="store_true", help="check the scripted model and exit")
+    p.add_argument("--live", action="store_true",
+                   help="the real model: OPENAI_API_KEY and SAMANTHA_BASE_URL from the "
+                        "environment (default: the scripted model)")
+    p.add_argument("--wait", action="store_true",
+                   help="SAMANTHA_AUTONOMY=off, and type the chat lines (--say)")
     p.add_argument("--round-seconds", type=float, default=0.3,
                    help="minimum time per round (default 0.3; train.py's own default is 1)")
     p.add_argument("--after", type=int, default=25, help="rounds to run after the change")
     p.add_argument("--say", action="append", metavar="TEXT",
-                   help="a chat line, in order (default: " + " / ".join(CONVERSATION) + ")")
-    p.add_argument("--out", default=str(HERE / "out" / "rehearse"),
+                   help="with --wait, a chat line, in order (default: "
+                        + " / ".join(CONVERSATION) + ")")
+    p.add_argument("--out", default=str(EXAMPLE / "out" / "story"),
                    help="directory for curves.png, history.json, and Samantha's state")
     p.add_argument("--timeout", type=float, default=300, help="seconds to wait for each step")
     args = p.parse_args(argv)
@@ -295,20 +269,21 @@ def main(argv: list[str] | None = None) -> int:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    server = serve()
-    env = dict(os.environ, SAMANTHA="act", SAMANTHA_AUTONOMY="off",
-               OPENAI_API_KEY="none",  # not a key: the scripted model does not check it
-               SAMANTHA_MODEL="scripted-model",
-               SAMANTHA_BASE_URL=f"http://127.0.0.1:{server.server_address[1]}",
-               SAMANTHA_STATE_DIR=str(out / "state"),
+    env = dict(os.environ, SAMANTHA="act", SAMANTHA_AUTONOMY="off" if args.wait else "goal",
+               SAMANTHA_STATE_DIR=str(out / "state"), MPLBACKEND="Agg",
                PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
-    print(f"scripted model on {env['SAMANTHA_BASE_URL']}; output in {out}", flush=True)
+    server = None
+    if not args.live:
+        server = serve(respond)
+        env.update(scripted_env(server))
+    print(f"model: {'real (live)' if args.live else 'scripted'}; output in {out}", flush=True)
     host = subprocess.Popen(
         [sys.executable, "distill/train.py", "--rounds", "400", "--out", str(out),
          "--round-seconds", str(args.round_seconds)],
-        cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        cwd=EXAMPLE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     stream = Stream(host.stdout, worth_showing)
     checks: dict[str, bool] = {}
+    replies: list[str] = []
     try:
         attach = stream.wait_for(r"attach: samantha --pid (\d+)", 60)
         checks["Samantha armed in the training program"] = bool(attach)
@@ -316,10 +291,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         finding = stream.wait_for(r"^\[samantha\] (flag|proposal): ", args.timeout)
         checks["Samantha raised a flag without being asked"] = bool(finding)
-        replies = talk(int(attach.group(1)), args.say or CONVERSATION)
-        checks["the reply has an intervention receipt"] = any(
-            "Applied runtime intervention" in r for r in replies)
-        change = stream.wait_for(r"^round (\d+)  sampling_weights\.rare changed live", 30)
+        if args.wait:
+            replies = talk(int(attach.group(1)), args.say or CONVERSATION)
+            checks["the reply has an intervention receipt"] = any(
+                "Applied runtime intervention" in r for r in replies)
+        change = stream.wait_for(r"^round (\d+)  sampling_weights\.rare changed live",
+                                 args.timeout)
         checks["the program saw the live change (no restart)"] = bool(change)
         if change:
             last = int(change.group(1)) + args.after
@@ -331,15 +308,23 @@ def main(argv: list[str] | None = None) -> int:
                 host.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 host.kill()
-        server.shutdown()
+        if server:
+            server.shutdown()
 
+    rows = []
+    for path in sorted((out / "state").glob("*/journal-*.jsonl")):
+        rows += [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
+    if not args.wait:
+        auto = [r for r in rows if r.get("type") == "chat" and r.get("direction") == "auto"]
+        checks["Samantha changed the run by herself (no chat)"] = bool(auto)
     history = json.loads((out / "history.json").read_text())
     rare = history["fidelity"]["rare"]
     if history["changes"]:
         at = history["changes"][0]["round"]
         before, best = rare[at - 1], max(rare[at:])
         print(f"fidelity/rare: {before:.3f} before round {at}, best {best:.3f} after", flush=True)
-        checks["fidelity/rare passed 0.9 after the change"] = best >= 0.9
+        if not args.live:
+            checks["fidelity/rare passed 0.9 after the change"] = best >= 0.9
     for name, ok in checks.items():
         print(f"{'PASS' if ok else 'FAIL'}: {name}", flush=True)
     print(f"plot: {out / 'curves.png'}", flush=True)
