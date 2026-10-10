@@ -30,10 +30,12 @@ python demo.py aliens
 
 pygame's alien shooter. Samantha reads the game and plans her first move (about
 20 s). Then press P to play: arrows move, Space fires, Esc quits. Her messages
-show under the game and in the terminal. While you do not get hit, she does
-nothing. When you get hit the first time, she makes the game easier at once:
-look for the green line "Samantha changed ...", less than 1 s after the hit.
-If the hits continue, she can change the game again, at most once every 10 s.
+show under the game and in the terminal. When you get hit the first time, she
+makes the game easier at once: look for the green line "Samantha changed ...",
+less than 1 s after the hit. Her aim is a fun game, not a game with no hits:
+if you get hit more than twice in a minute, she makes it easier again; if you
+go 30 s without a hit, she makes it a notch harder, but never harder than at
+the start.
 
 ## Demo 2: Samantha fixes a training run
 
