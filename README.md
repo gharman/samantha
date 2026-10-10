@@ -67,9 +67,14 @@ import samantha  # Samantha starts here
 # daemon: goal: every region reaches fidelity 0.95
 # daemon: sampling_weights are fair game within 0.1-5.0
 
-samantha.expose("rare_weight", obj=weights, attr="rare", bounds=(0.1, 5.0))
 print(f"fidelity: {fidelity:.3f} (target 0.95)")  # a metric with a target
 ```
+
+That is all the instrumentation she needs. She finds what to change herself,
+by introspection of the running program: modules, frames, globals, objects.
+The `# daemon:` comments tell her what is allowed and what to leave alone.
+For a limit that the code enforces, not only her instructions, add
+`samantha.expose("rare_weight", obj=weights, attr="rare", bounds=(0.1, 5.0))`.
 
 Put `OPENAI_API_KEY` in a `.env` in your project folder, or in the environment.
 By default Samantha only gives advice. `SAMANTHA=act` lets her change the
