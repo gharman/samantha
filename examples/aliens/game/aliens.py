@@ -388,12 +388,14 @@ def main(winstyle=0):
                     pg.display.flip()
                     fullscreen = not fullscreen
 
-        # P pauses, so that you can type to Samantha. The game starts paused while Samantha reads it.
+        # P pauses, so that you can type to Samantha. The game starts paused while Samantha
+        # reads it and plans her first move.
         if paused:
             print("[game] paused", flush=True)
         while paused:
             cog = getattr(samantha.resident(), "cognition", None)  # None: Samantha off, or no key
-            ready = cog is None or cog.provider_ready is False or cog.analysis_ready is not None
+            ready = cog is None or cog.provider_ready is False or (
+                cog.analysis_ready is not None and not cog.preparing)
             cog = None  # keep Samantha's own objects out of the locals that its planner can read
             for event in pg.event.get():
                 if event.type == pg.QUIT or event.type == pg.KEYDOWN and event.key == pg.K_ESCAPE:
