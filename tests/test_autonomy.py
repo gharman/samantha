@@ -150,6 +150,48 @@ def test_planner_sees_recent_program_output(tmp_path: Path, monkeypatch: object)
     assert "hits per minute" not in seen[0]["operator_request"]
 
 
+def test_daemon_goal_directive_is_the_goal_when_none_is_set(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    from samantha.cognition.harness import directive_goal, operator_intent
+
+    current, llm = resident(tmp_path)
+    (tmp_path / "source-inventory.json").write_text(json.dumps({"directives": [
+        "goal: the player should be hit less than once per minute",
+        "fair game, live: BOMB_ODDS 60-600",
+    ]}))
+    current.config.goal = None
+    assert operator_intent(current)["current_goal"] == (
+        "the player should be hit less than once per minute"
+    )
+    current.config.goal = "operator text wins"
+    assert operator_intent(current)["current_goal"] == "operator text wins"
+    assert directive_goal(["goal — every region reaches 0.95", "goals are nice"]) == (
+        "every region reaches 0.95"
+    )
+    assert directive_goal(["never touch SCORE"]) is None
+    # Wakes see the directives too (what is fair game, and the limits).
+    prompts: list[str] = []
+
+    def complete(messages: list[dict], signature: str = "default") -> dict:
+        prompts.append(messages[0]["content"])
+        return {"assessment": "ok", "actions": []}
+
+    llm.complete = complete
+    import samantha
+
+    settings = SimpleNamespace(rare=1.0)
+    monkeypatch.setattr(samantha, "_exposures", {})
+    samantha.expose("rare_weight", obj=settings, attr="rare", bounds=(0.1, 5.0))
+    current.cognition.wake(WakeEvent("stall", {"series": "x"}))
+    assert "fair game, live: BOMB_ODDS 60-600" in prompts[0]
+    # ... and the declared knobs, with their current values and bounds.
+    sent = json.loads(prompts[0][prompts[0].rindex('{"event"'):])
+    assert sent["declared_knobs"] == [
+        {"name": "rare_weight", "value": 1.0, "bounds": [0.1, 5.0]}
+    ]
+
+
 def test_gap_wake_does_not_act_without_the_setting(
     tmp_path: Path, monkeypatch: object
 ) -> None:

@@ -48,16 +48,10 @@ her change, and the red curve goes up. Close the plot window to stop.
 
 ## Talk to Samantha (optional)
 
-You do not need a second window. To talk to her, open a second terminal in this
-folder, then type to her, for example `help` or `slow the aliens down`:
-
-```console
-source .venv/bin/activate
-samantha
-```
-
-To make her wait for you instead of acting by herself, add `--wait`:
-`python demo.py aliens --wait`.
+You do not need a second window. To talk to her, run
+`source .venv/bin/activate` and then `samantha` in a second terminal in this
+folder, and type, for example, `help` or `slow the aliens down`. To make her
+wait for you instead of acting by herself: `python demo.py aliens --wait`.
 
 ## Use Samantha in your own program
 
@@ -80,8 +74,8 @@ program, and `SAMANTHA_AUTONOMY=goal` lets her do it without being asked. The
 
 ## If the install fails
 
-- pip tries to build `pygame` (`SDL.h` not found): the venv is not active, or
-  it is an old one. Run `deactivate` and `rm -rf .venv`, then do the install
-  steps again. Samantha uses `pygame-ce`, which has wheels for Python 3.12-3.14.
-- `python -m pip --version` must show a path in `.venv`.
-- Debian or Ubuntu: if `python3 -m venv` fails, run `sudo apt install python3-venv`.
+- pip tries to build `pygame` (`SDL.h` not found): the venv is not active, or it
+  is an old one (`python -m pip --version` must show `.venv`). Run `deactivate`
+  and `rm -rf .venv`, then do the install again. The demos use `pygame-ce`,
+  which has wheels for Python 3.12-3.14.
+- Debian or Ubuntu: if `python3 -m venv` fails, `sudo apt install python3-venv`.

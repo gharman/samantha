@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import queue
+import re
 import threading
 import time
 import uuid
@@ -15,15 +16,56 @@ from samantha.state import load_json
 
 
 def operator_intent(resident: Any) -> dict[str, Any]:
-    """The operator's current and standing goals, included in every model context."""
+    """The operator's current and standing goals, included in every model context.
+    With no goal set, a '# daemon: goal ...' directive in the source is the goal."""
     try:
         lines = (resident.state / "goals.md").read_text(errors="replace").splitlines()
     except OSError:
         lines = []
     return {
-        "current_goal": getattr(resident.config, "goal", None),
+        "current_goal": getattr(resident.config, "goal", None)
+        or directive_goal(operator_directives(resident)),
         "standing_goals": [line.strip() for line in lines if line.strip()][-20:],
     }
+
+
+def operator_directives(resident: Any) -> list[str]:
+    """The '# daemon:' directives from the source inventory (read once)."""
+    cached = getattr(resident, "_directives", None)
+    if cached is None:
+        inventory = load_json(resident.state / "source-inventory.json", {})
+        cached = [str(d)[:300] for d in inventory.get("directives", [])][:20]
+        try:
+            resident._directives = cached
+        except AttributeError:
+            pass
+    return cached
+
+
+def declared_knob_values(limit: int = 20) -> list[dict[str, Any]]:
+    """The knobs declared with samantha.expose: name, current value, bounds."""
+    from samantha import _exposures
+
+    knobs = []
+    for name, exposure in list(_exposures.items())[:limit]:
+        try:
+            value = exposure.get()
+        except Exception as exc:  # a broken getter must not stop the wake
+            value = f"unreadable: {type(exc).__name__}"
+        if not (value is None or isinstance(value, (bool, int, float, str))):
+            value = repr(value)[:80]
+        knobs.append({"name": name, "value": value, "bounds": exposure.bounds})
+    return knobs
+
+
+def directive_goal(directives: list[str]) -> str | None:
+    """'goal: X' or 'goal — X' directives, joined; None if there is none."""
+    goals = [
+        re.sub(r"^goal\s*[:\-–—]?\s*", "", text.strip(), flags=re.IGNORECASE)
+        for text in directives
+        if re.match(r"goal\b", text.strip(), re.IGNORECASE)
+    ]
+    return "; ".join(g for g in goals if g) or None
 
 
 WAKE_INSTRUCTIONS = """
@@ -272,6 +314,10 @@ Analyzed {len(inventory.get("files", {}))} project files.
                 "evidence": event.evidence,
                 "mode": cfg.mode,
                 "operator_intent": operator_intent(self.resident),
+                # The operator's '# daemon:' lines: what is fair game, and limits.
+                "operator_directives": operator_directives(self.resident),
+                # Knobs the host declared (samantha.expose), with current values.
+                "declared_knobs": declared_knob_values(),
                 "open_flags": [
                     {"id": flag["id"], "summary": flag.get("summary")}
                     for flag in self.open_flags.values()

@@ -282,7 +282,13 @@ def arm(entry: str | Path | None = None, **overrides: object) -> Resident | None
             )
             (state / "model.md").write_text(model)
             (state / "goals.md").touch(exist_ok=True)
-            goal_status = config.goal or "not specified"
+            from .cognition.harness import directive_goal
+
+            goal_status = config.goal or (
+                f"{found} (# daemon:)"
+                if (found := directive_goal([str(d) for d in directives]))
+                else "not specified"
+            )
             LOG.info(
                 "source: %s · files inventoried: %s · goal: %s · directives: %s",
                 relative_entry,
