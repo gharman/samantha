@@ -32,6 +32,9 @@ class MetricStore:
     def __init__(self, size: int = 4096) -> None:
         self.series: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=size))
         self.references: dict[str, float] = {}
+        # The last line that gave each series a value: wakes show it as evidence,
+        # so the model sees "5.7 hits per minute · goal met: 0", not only "goal.met".
+        self.last_line: dict[str, str] = {}
 
     def ingest(self, line: str) -> list[dict[str, Any]]:
         found: list[dict[str, Any]] = []
@@ -47,6 +50,7 @@ class MetricStore:
             if match.groupdict().get("pct"):
                 value /= 100
             self.series[name].append(value)
+            self.last_line[name] = line[:300]
             item: dict[str, Any] = {"series": name, "value": value}
             if ceiling:
                 reference = float(ceiling.group("value"))

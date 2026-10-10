@@ -39,7 +39,8 @@ healthy or the evidence does not clear the bar. Action types:
   for every other action type.
 """
 
-# One autonomous act turn per series per this many seconds (SAMANTHA_AUTONOMY=goal).
+# One autonomous act turn per series per this many seconds (SAMANTHA_AUTONOMY=goal),
+# unless the configuration sets autonomy_dwell (SAMANTHA_AUTONOMY_DWELL).
 AUTONOMY_DWELL_SECONDS = 600.0
 
 
@@ -310,9 +311,12 @@ Analyzed {len(inventory.get("files", {}))} project files.
             return
         # Measured from when the sentinel fired, the same clock its re-arm uses.
         series, at = str(event.evidence.get("series")), event.at
-        if at - self._acted.get(series, float("-inf")) < AUTONOMY_DWELL_SECONDS:
-            return  # dwell and washout: one autonomous turn per series per 10 min
+        dwell = float(getattr(cfg, "autonomy_dwell", AUTONOMY_DWELL_SECONDS))
+        if at - self._acted.get(series, float("-inf")) < dwell:
+            return  # dwell and washout: one autonomous turn per series per dwell
         self._acted[series] = at
+        # Program output stays out of this request text: it is testimony, and the
+        # planner sees it separately as recent_process_activity.
         request = (
             f"Standing approval (SAMANTHA_AUTONOMY=goal): {series} is "
             f"{event.evidence.get('value')}, below its target "

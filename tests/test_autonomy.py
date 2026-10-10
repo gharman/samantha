@@ -88,7 +88,12 @@ def gap_event() -> WakeEvent:
         metrics.ingest("goal met: 0 (target 1)")
     events = [e for e in Sentinels(metrics).inspect_metrics() if e.sentinel == "gap"]
     assert len(events) == 1
-    assert events[0].evidence == {"series": "goal.met", "value": 0.0, "reference": 1.0}
+    assert events[0].evidence == {
+        "series": "goal.met",
+        "value": 0.0,
+        "reference": 1.0,
+        "line": "goal met: 0 (target 1)",
+    }
     return events[0]
 
 
@@ -121,6 +126,28 @@ def test_gap_wake_acts_with_goal_autonomy_and_is_revertible(
     (group,) = runtime.groups.values()
     assert runtime.revert(group.id)
     assert module.SPEED == 1
+
+
+def test_planner_sees_recent_program_output(tmp_path: Path, monkeypatch: object) -> None:
+    speed_module(tmp_path, monkeypatch)
+    current, llm = resident(tmp_path)
+    lines = [{"source": "stdout", "text": f"{i} hits per minute"} for i in range(30)]
+    current.observer = SimpleNamespace(recent_snapshot=lambda limit=50: lines[-limit:])
+    seen: list[dict] = []
+    plan = llm.plan_action
+
+    def spy(messages: list[dict]) -> dict:
+        seen.append(json.loads(messages[0]["content"]))
+        return plan(messages)
+
+    llm.plan_action = spy
+    current.cognition.wake(gap_event())
+    settle()
+    assert seen[0]["recent_process_activity"] == [
+        f"{i} hits per minute" for i in range(10, 30)
+    ]
+    # The request itself carries no program output (it is not an instruction).
+    assert "hits per minute" not in seen[0]["operator_request"]
 
 
 def test_gap_wake_does_not_act_without_the_setting(
@@ -263,19 +290,32 @@ def unmet_metrics() -> MetricStore:
 
 def test_gap_fires_once_without_rearm() -> None:
     sentinels = Sentinels(unmet_metrics())
-    assert [e.sentinel for e in sentinels.inspect_metrics()] == ["stall", "gap"]
+    # A flat series below its target is one wake (gap), not also a stall.
+    assert [e.sentinel for e in sentinels.inspect_metrics()] == ["gap"]
     for key in sentinels.fired:
         sentinels.fired[key] -= 3600
     assert sentinels.inspect_metrics() == []
 
 
+def test_stall_still_fires_for_flat_series_without_a_gap() -> None:
+    metrics = MetricStore()
+    for _ in range(20):
+        metrics.ingest("gpu/util: 72%")
+        metrics.ingest("goal met: 1 (target 1)")
+    events = Sentinels(metrics).inspect_metrics()
+    # gpu.util has no target; goal.met is flat but at its target.
+    assert sorted((e.sentinel, e.evidence["series"]) for e in events) == [
+        ("stall", "goal.met"),
+        ("stall", "gpu.util"),
+    ]
+
+
 def test_rearmed_gap_fires_again_after_the_dwell() -> None:
     sentinels = Sentinels(unmet_metrics(), rearm={"gap": 600.0})
-    assert [e.sentinel for e in sentinels.inspect_metrics()] == ["stall", "gap"]
+    assert [e.sentinel for e in sentinels.inspect_metrics()] == ["gap"]
     assert sentinels.inspect_metrics() == []  # still inside the dwell
     for key in sentinels.fired:
         sentinels.fired[key] -= 601
-    # Only the sentinel that rearm names fires again.
     assert [e.sentinel for e in sentinels.inspect_metrics()] == ["gap"]
 
 
@@ -296,6 +336,38 @@ def test_unmet_target_gets_another_turn_after_the_dwell(
     assert llm.plans == 2
 
 
+def test_autonomy_dwell_is_configurable_with_a_floor(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SAMANTHA_AUTONOMY_DWELL", raising=False)
+    assert Config.resolve(_dotenv_start=tmp_path).autonomy_dwell == 600
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_DWELL", "90")
+    assert Config.resolve(_dotenv_start=tmp_path).autonomy_dwell == 90
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_DWELL", "5")
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.autonomy_dwell == 30
+    assert any("SAMANTHA_AUTONOMY_DWELL" in warning for warning in config.warnings)
+
+
+def test_a_shorter_dwell_gives_the_next_turn_sooner(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    speed_module(tmp_path, monkeypatch)
+    current, llm = resident(tmp_path)
+    current.config.autonomy_dwell = 90
+    first = gap_event()
+    current.cognition.wake(first)
+    settle()
+    evidence = dict(first.evidence)
+    current.cognition.wake(WakeEvent("gap", evidence, at=first.at + 60))
+    settle()
+    assert llm.plans == 1
+    current.cognition.wake(WakeEvent("gap", evidence, at=first.at + 90))
+    settle()
+    assert llm.plans == 2
+
+
 def test_runtime_rearms_gap_only_for_goal_autonomy_in_act_mode(
     tmp_path: Path, monkeypatch: object
 ) -> None:
@@ -303,13 +375,14 @@ def test_runtime_rearms_gap_only_for_goal_autonomy_in_act_mode(
 
     monkeypatch.setattr("samantha.chat.server.ChatServer.start", lambda self: None)
     monkeypatch.setattr("samantha.cli.runtime_dir", lambda: tmp_path / "run")
-    for mode, autonomy, rearm in [
-        ("act", "goal", {"gap": 600.0}),
-        ("act", "off", {}),
-        ("advise", "goal", {}),
+    for mode, autonomy, dwell, rearm in [
+        ("act", "goal", 600, {"gap": 600.0}),
+        ("act", "goal", 90, {"gap": 90.0}),
+        ("act", "off", 600, {}),
+        ("advise", "goal", 600, {}),
     ]:
         current = SimpleNamespace(
-            config=Config(mode=mode, autonomy=autonomy),
+            config=Config(mode=mode, autonomy=autonomy, autonomy_dwell=dwell),
             observer=SimpleNamespace(metrics=MetricStore()),
             stop=lambda: None,
         )

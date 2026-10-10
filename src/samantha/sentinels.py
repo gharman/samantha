@@ -44,20 +44,22 @@ class Sentinels:
                 events.append(
                     WakeEvent("nan-inf", {"series": name, "values": window[-3:]})
                 )
-            if len(window) >= 20 and max(window) - min(window) < 1e-6:
-                events.append(WakeEvent("stall", {"series": name, "window": window}))
             ref = self.metrics.references.get(name)
-            if (
+            gap = (
                 ref is not None
                 and len(window) >= 20
                 and ref - window[-1] > 0.05
                 and abs(window[-1] - window[0]) < 0.005
-            ):
-                events.append(
-                    WakeEvent(
-                        "gap", {"series": name, "value": window[-1], "reference": ref}
-                    )
-                )
+            )
+            # A flat series below its target is one problem: the gap wake covers
+            # it, so it does not also cost a stall wake (and a model call).
+            if not gap and len(window) >= 20 and max(window) - min(window) < 1e-6:
+                events.append(WakeEvent("stall", {"series": name, "window": window}))
+            if gap:
+                evidence = {"series": name, "value": window[-1], "reference": ref}
+                if line := getattr(self.metrics, "last_line", {}).get(name):
+                    evidence["line"] = line
+                events.append(WakeEvent("gap", evidence))
         return self._once(events)
 
     def _once(self, events: list[WakeEvent]) -> list[WakeEvent]:
