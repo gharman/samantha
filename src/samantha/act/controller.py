@@ -22,11 +22,91 @@ class ActController:
         # Chat turns and autonomous turns share one live graph.
         self._turn = threading.Lock()
 
-    def handle(self, operator_text: str) -> str:
+    def handle(self, operator_text: str, synthesize: bool = True) -> str:
+        """One act turn. synthesize=False: no model call after a change; the
+        reply is the receipt and the planner's reply (miss-line turns, which
+        answer no operator question)."""
         with self._turn:
-            return self._handle(operator_text)
+            return self._handle(operator_text, synthesize)
 
-    def _handle(self, operator_text: str) -> str:
+    def prepare(self, request: str, max_rounds: int = 3) -> dict[str, Any] | None:
+        """Plan a move now and apply nothing (SAMANTHA_AUTONOMY_TRIGGER).
+
+        Read operations run and planning continues, as in a turn. The first
+        plan with write operations ends it: its set operations on declared knobs
+        with in-bounds values are kept, with the knob values they were planned
+        against ("refused" lists the others). "operations" is empty when none
+        remains or the planner declined; "reply" then says why. None: there is
+        no planner."""
+        planner = getattr(self.llm, "plan_action", None)
+        if not planner:
+            return None
+        with self._turn:
+            transcript: list[dict[str, Any]] = []
+            for round_number in range(max_rounds):
+                context = self._context(request, transcript, round_number)
+                plan = planner([{"role": "user", "content": json.dumps(context)}])
+                operations = self._decode_operations(plan.get("operations", []))
+                reply = str(plan.get("reply") or "")
+                writes = [op for op in operations if self._is_write(op)]
+                if not operations:
+                    return {"operations": [], "reply": reply}
+                if writes:
+                    return self._prepared(writes, plan, reply)
+                group = self.runtime.execute(request, operations, "contextual")
+                transcript.append(
+                    {
+                        "plan": plan,
+                        "group_id": group.id,
+                        "status": group.status,
+                        "results": [result.as_dict() for result in group.results],
+                    }
+                )
+        return {"operations": [], "reply": "no move after the read rounds"}
+
+    def _prepared(
+        self, writes: list[dict[str, Any]], plan: dict[str, Any], reply: str
+    ) -> dict[str, Any]:
+        knobs = {k["path"]: k for k in self.runtime.declared_knobs()}
+        kept, refused = [], []
+        for op in writes:
+            knob = knobs.get(op["path"])
+            value, bounds = op.get("value"), (knob or {}).get("bounds")
+            if op.get("op") != "set" or knob is None or op.get("decode_error"):
+                refused.append(f"{op.get('op')} {op['path']}: not a set on a declared knob")
+            elif knob.get("protected"):
+                refused.append(f"{op['path']}: protected")
+            elif not isinstance(value, (int, float)) or isinstance(value, bool):
+                refused.append(f"{op['path']}: {value!r} is not a number")
+            elif bounds and not bounds[0] <= value <= bounds[1]:
+                refused.append(f"{op['path']}: {value!r} is outside {tuple(bounds)}")
+            else:
+                kept.append(op)
+        return {
+            "operations": kept,
+            "refused": refused,
+            "reply": reply,
+            "lifetime": str(plan.get("lifetime") or "process"),
+            # The move is applied only while these values are unchanged.
+            "planned_against": {op["path"]: _knob_value(op["path"]) for op in kept},
+        }
+
+    def apply_prepared(self, move: dict[str, Any], request: str) -> str | None:
+        """Apply a prepared move through the audited runtime, with no model call.
+        None (nothing applied) when a knob it changes has moved since it was
+        planned: the plan no longer fits the program."""
+        with self._turn:
+            for path, planned in move["planned_against"].items():
+                try:
+                    if _knob_value(path) != planned:
+                        return None
+                except KeyError:
+                    return None
+            group = self.runtime.execute(request, move["operations"], move["lifetime"])
+            reply = str(move.get("reply") or "")
+            return self._receipt(group, f"Planned at startup: {reply}" if reply else "")
+
+    def _handle(self, operator_text: str, synthesize: bool = True) -> str:
         planner = getattr(self.llm, "plan_action", None)
         if not planner:
             return self._plain_fallback(operator_text)
@@ -63,6 +143,11 @@ class ActController:
             )
             if mutated:
                 receipt = self._receipt(group, "")
+                if not synthesize:
+                    reply = str(plan.get("reply") or "")
+                    return self._receipt(
+                        group, f"Planned before the change: {reply}" if reply else ""
+                    )
                 answer = self._final_answer(
                     operator_text,
                     group,
@@ -356,6 +441,13 @@ class ActController:
         return (
             str(converse(messages)) if converse else "Runtime planning is unavailable."
         )
+
+
+def _knob_value(path: str) -> Any:
+    """The current value of a declared knob ('exposed:<name>'); KeyError if none."""
+    from samantha import _exposures
+
+    return _exposures[path.removeprefix("exposed:")].get()
 
 
 def _decode(value: Any, default: Any) -> Any:

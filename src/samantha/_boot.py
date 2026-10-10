@@ -21,6 +21,10 @@ DEFAULT_ACT_MAX_ROUNDS = 12
 # One autonomous act turn per series per this many seconds (SAMANTHA_AUTONOMY_DWELL).
 DEFAULT_AUTONOMY_DWELL = 600
 MIN_AUTONOMY_DWELL = 30
+# One act turn on miss lines (SAMANTHA_AUTONOMY_TRIGGER) per this many seconds
+# (SAMANTHA_AUTONOMY_TRIGGER_DWELL).
+DEFAULT_TRIGGER_DWELL = 15
+MIN_TRIGGER_DWELL = 10
 _resident: Resident | None = None
 
 
@@ -42,6 +46,11 @@ class Config:
     autonomy: str = "off"
     # Seconds between autonomous act turns for one series (and gap re-fires).
     autonomy_dwell: float = DEFAULT_AUTONOMY_DWELL
+    # A regular expression: a program output line that matches it is a miss
+    # against the goal (goal autonomy in act mode only). The first miss applies
+    # a move planned at startup; later misses get act turns, one per trigger_dwell.
+    autonomy_trigger: str | None = None
+    trigger_dwell: float = DEFAULT_TRIGGER_DWELL
     log_level: str = "INFO"
     warnings: list[str] = field(default_factory=list)
 
@@ -80,6 +89,10 @@ class Config:
             autonomy_dwell=number(
                 "SAMANTHA_AUTONOMY_DWELL", float, DEFAULT_AUTONOMY_DWELL
             ),
+            autonomy_trigger=(env("SAMANTHA_AUTONOMY_TRIGGER") or "").strip() or None,
+            trigger_dwell=number(
+                "SAMANTHA_AUTONOMY_TRIGGER_DWELL", float, DEFAULT_TRIGGER_DWELL
+            ),
             log_level=(
                 "OFF"
                 if _truthy(env("SAMANTHA_QUIET"))
@@ -102,6 +115,29 @@ class Config:
                 f"{MIN_AUTONOMY_DWELL} seconds; using {MIN_AUTONOMY_DWELL}"
             )
             values["autonomy_dwell"] = float(MIN_AUTONOMY_DWELL)
+        if values["trigger_dwell"] < MIN_TRIGGER_DWELL:
+            warnings.append(
+                f"SAMANTHA_AUTONOMY_TRIGGER_DWELL={values['trigger_dwell']:g} is below "
+                f"{MIN_TRIGGER_DWELL} seconds; using {MIN_TRIGGER_DWELL}"
+            )
+            values["trigger_dwell"] = float(MIN_TRIGGER_DWELL)
+        if trigger := values["autonomy_trigger"]:
+            try:
+                re.compile(trigger)
+            except re.error as exc:
+                warnings.append(
+                    f"SAMANTHA_AUTONOMY_TRIGGER={trigger!r} is not a valid regular "
+                    f"expression ({exc}); ignoring it"
+                )
+                values["autonomy_trigger"] = None
+        if values["autonomy_trigger"] and not (
+            values["mode"] == "act" and values["autonomy"] == "goal"
+        ):
+            warnings.append(
+                "SAMANTHA_AUTONOMY_TRIGGER needs SAMANTHA=act and "
+                "SAMANTHA_AUTONOMY=goal; ignoring it"
+            )
+            values["autonomy_trigger"] = None
         return cls(**values)
 
 
@@ -329,6 +365,15 @@ def _start_runtime(current: Resident) -> None:
             current.observer.metrics,
             rearm={"gap": dwell} if autonomous else None,
         )
+        trigger = getattr(current.config, "autonomy_trigger", None)
+        current.trigger = re.compile(trigger) if autonomous and trigger else None
+        if current.trigger is not None:
+            LOG.info(
+                "miss lines: /%s/ · first move planned at startup · then one act "
+                "turn per %g s while misses continue",
+                trigger,
+                float(getattr(current.config, "trigger_dwell", DEFAULT_TRIGGER_DWELL)),
+            )
         if current.config.api_key and current.config.mode in {"advise", "act"}:
             current.cognition = Cognition(
                 current,
@@ -359,6 +404,13 @@ def _start_runtime(current: Resident) -> None:
 
 
 def _inspect(current: Resident, text: str) -> None:
+    trigger = getattr(current, "trigger", None)
+    if trigger is not None and trigger.search(text):
+        # A miss line (SAMANTHA_AUTONOMY_TRIGGER). It goes past the wake queue,
+        # so a wake's model call in progress does not hold it up. The act turn
+        # runs on its own thread; this call returns at once.
+        if cognition := getattr(current, "cognition", None):
+            cognition.on_trigger(text)
     events = current.sentinels.inspect_line(text)
     events.extend(current.sentinels.inspect_metrics())
     for event in events:

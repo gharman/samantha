@@ -424,9 +424,232 @@ def test_runtime_rearms_gap_only_for_goal_autonomy_in_act_mode(
         ("advise", "goal", 600, {}),
     ]:
         current = SimpleNamespace(
-            config=Config(mode=mode, autonomy=autonomy, autonomy_dwell=dwell),
+            config=Config(mode=mode, autonomy=autonomy, autonomy_dwell=dwell,
+                          autonomy_trigger="^player hit"),
             observer=SimpleNamespace(metrics=MetricStore()),
             stop=lambda: None,
         )
         _start_runtime(current)
         assert current.sentinels.rearm == rearm
+        # Miss lines count only under goal autonomy in act mode.
+        assert (current.trigger is not None) == bool(rearm)
+
+
+# --- miss lines (SAMANTHA_AUTONOMY_TRIGGER) --------------------------------------
+
+
+class MissLLM:
+    """The first-move plan sets speed 3; later turns set speed 5. No chat."""
+
+    def __init__(self, first: list[dict] | None = None) -> None:
+        self.requests: list[str] = []
+        self.chats = 0
+        self.first = first
+        self.gate: threading.Event | None = None
+
+    def complete(self, messages: object, signature: str = "default") -> dict:
+        return {"assessment": "ok", "actions": []}
+
+    def chat(self, messages: object) -> str:
+        self.chats += 1
+        return "synthesized"
+
+    def plan_action(self, messages: list[dict]) -> dict[str, object]:
+        request = json.loads(messages[0]["content"])["operator_request"]
+        self.requests.append(request)
+        if self.gate is not None:
+            self.gate.wait(5)
+        first = "plan your first move now" in request
+        value = 3 if first else 5
+        operations = self.first if first and self.first is not None else [
+            {"op": "set", "effect": "write", "path": "exposed:speed", "query": None,
+             "value_json": str(value), "args_json": None, "kwargs_json": None,
+             "lifetime": "process", "duration_s": None, "reason": "fewer misses"}
+        ]
+        return {"intent": "act", "reply": f"speed to {value}", "done": True,
+                "lifetime": "process", "operations": operations}
+
+
+def miss_resident(tmp_path: Path, monkeypatch: object, autonomy: str = "goal",
+                  llm: MissLLM | None = None):
+    import samantha
+
+    knob = SimpleNamespace(speed=1)
+    monkeypatch.setattr(samantha, "_exposures", {})
+    samantha.expose("speed", obj=knob, attr="speed", bounds=(1, 9))
+    speed_module(tmp_path, monkeypatch)
+    config = SimpleNamespace(
+        mode="act", autonomy=autonomy, max_wakes_per_hour=0, token_budget_per_day=0,
+        flag_budget=0, act_max_rounds=4, model="test-model", goal="fewer misses",
+        autonomy_trigger="^player hit", trigger_dwell=10.0,
+    )
+    llm = llm or MissLLM()
+    current = SimpleNamespace(
+        config=config, journal=Journal(tmp_path, "run"),
+        ledger=Ledger(tmp_path / "ledger.json"), state=tmp_path, root=tmp_path,
+    )
+    current.actuator = ActController(current, llm)
+    current.cognition = Cognition(current, llm)
+    current.cognition.provider_ready = True  # the model check passed
+    return current, llm, knob
+
+
+def test_first_miss_applies_the_planned_move_with_no_model_call(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    current, llm, knob = miss_resident(tmp_path, monkeypatch)
+    cog = current.cognition
+    cog._prepare()  # at startup, while the program is healthy
+    assert knob.speed == 1 and len(llm.requests) == 1
+    assert cog.prepared["planned_against"] == {"exposed:speed": 1}
+    assert cog.on_trigger("player hit · deaths: 1") is True
+    settle()
+    assert knob.speed == 3
+    assert len(llm.requests) == 1 and llm.chats == 0  # no model call at the miss
+    rows = [r for r in journal_rows(current) if r["type"] == "chat"]
+    assert "applying the first move" in rows[-2]["text"]
+    assert rows[-1]["text"].startswith("Applied runtime intervention")
+    assert any(r["type"] == "intervention" for r in journal_rows(current))
+    assert any(n.startswith("acted: ") for n in cog.notices)
+    # The move is audited and revertible like any other change.
+    (group,) = current.actuator.runtime.groups.values()
+    assert current.actuator.runtime.revert(group.id) and knob.speed == 1
+
+
+def test_later_misses_plan_live_once_per_dwell_with_no_synthesis(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    current, llm, knob = miss_resident(tmp_path, monkeypatch)
+    cog = current.cognition
+    cog._prepare()
+    assert cog.on_trigger("player hit") is True
+    settle()
+    assert cog.on_trigger("player hit") is False  # inside the dwell: counted only
+    assert cog.on_trigger("player hit") is False
+    cog._trigger_at -= 10  # the dwell has passed
+    assert cog.on_trigger("player hit") is True
+    settle()
+    assert knob.speed == 5
+    assert len(llm.requests) == 2 and llm.chats == 0
+    assert "3 line(s)" in llm.requests[1] and "10 s between" in llm.requests[1]
+    assert "player hit" not in llm.requests[1].replace("'^player hit'", "")
+
+
+def test_planned_move_is_dropped_when_its_knob_moved(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    current, llm, knob = miss_resident(tmp_path, monkeypatch)
+    current.cognition._prepare()
+    knob.speed = 2  # for example, a chat turn changed it
+    current.cognition.on_trigger("player hit")
+    settle()
+    assert knob.speed == 5  # planned again, live
+    assert len(llm.requests) == 2
+    texts = [r["text"] for r in journal_rows(current) if r["type"] == "chat"]
+    assert any("was not applied" in t for t in texts)
+
+
+def test_planned_move_keeps_only_in_bounds_sets_on_declared_knobs(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    def op(path: str, value: str, kind: str = "set") -> dict:
+        return {"op": kind, "effect": "write", "path": path, "query": None,
+                "value_json": value, "args_json": None, "kwargs_json": None,
+                "lifetime": "process", "duration_s": None, "reason": "x"}
+
+    llm = MissLLM(first=[op("exposed:speed", "99"),
+                         op("module:autonomy_demo::SPEED", "3"),
+                         op("exposed:speed", '"fast"')])
+    current, _, knob = miss_resident(tmp_path, monkeypatch, llm=llm)
+    cog = current.cognition
+    cog._prepare()
+    assert cog.prepared is None
+    texts = [r["text"] for r in journal_rows(current) if r["type"] == "chat"]
+    assert "outside (1, 9)" in texts[-1] and "not a set on a declared knob" in texts[-1]
+    assert "is not a number" in texts[-1]
+    cog.on_trigger("player hit")
+    settle()
+    assert knob.speed == 5 and sys.modules["autonomy_demo"].SPEED == 1
+
+
+def test_a_miss_during_planning_waits_for_the_first_move(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    current, llm, knob = miss_resident(tmp_path, monkeypatch)
+    cog = current.cognition
+    llm.gate = threading.Event()
+    cog.preparing = True
+    planner = threading.Thread(target=cog._prepare)
+    planner.start()
+    assert cog.on_trigger("player hit") is True
+    llm.gate.set()
+    planner.join(5)
+    settle()
+    assert knob.speed == 3 and len(llm.requests) == 1
+
+
+def test_misses_do_nothing_without_goal_autonomy(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    current, llm, knob = miss_resident(tmp_path, monkeypatch, autonomy="off")
+    assert current.cognition.on_trigger("player hit") is False
+    settle()
+    assert knob.speed == 1 and llm.requests == []
+
+
+def test_misses_before_the_model_check_or_while_silenced_are_ignored(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    current, llm, knob = miss_resident(tmp_path, monkeypatch)
+    cog = current.cognition
+    cog.provider_ready = None  # the model check has not finished
+    assert cog.on_trigger("player hit") is False
+    cog.provider_ready = True
+    current.quiet_until = time.time() + 60  # samantha.silence()
+    assert cog.on_trigger("player hit") is False
+    settle()
+    assert knob.speed == 1 and llm.requests == []
+
+
+def test_inspect_sends_miss_lines_past_the_wake_queue() -> None:
+    import re
+
+    from samantha._boot import _inspect
+
+    seen: list[str] = []
+    current = SimpleNamespace(
+        trigger=re.compile("^player hit"),
+        cognition=SimpleNamespace(on_trigger=seen.append, submit=lambda event: None),
+        sentinels=Sentinels(MetricStore()),
+        journal=SimpleNamespace(write=lambda *a, **k: None),
+    )
+    _inspect(current, "player hit · deaths: 1")
+    _inspect(current, "1.0 hits per minute · goal met: 0 (target 1)")
+    assert seen == ["player hit · deaths: 1"]
+
+
+def test_trigger_settings_are_resolved_and_validated(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    for name in ("SAMANTHA_AUTONOMY_TRIGGER", "SAMANTHA_AUTONOMY_TRIGGER_DWELL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SAMANTHA", "act")
+    monkeypatch.setenv("SAMANTHA_AUTONOMY", "goal")
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.autonomy_trigger is None and config.trigger_dwell == 15
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_TRIGGER", r"^player hit\b")
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_TRIGGER_DWELL", "3")
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.autonomy_trigger == r"^player hit\b"
+    assert config.trigger_dwell == 10  # the floor
+    assert any("TRIGGER_DWELL" in warning for warning in config.warnings)
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_TRIGGER", "player (hit")
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.autonomy_trigger is None
+    assert any("not a valid regular expression" in w for w in config.warnings)
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_TRIGGER", "^player hit")
+    monkeypatch.setenv("SAMANTHA_AUTONOMY", "off")
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.autonomy_trigger is None
+    assert any("needs SAMANTHA=act" in w for w in config.warnings)

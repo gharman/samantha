@@ -84,6 +84,34 @@ healthy or the evidence does not clear the bar. Action types:
 # One autonomous act turn per series per this many seconds (SAMANTHA_AUTONOMY=goal),
 # unless the configuration sets autonomy_dwell (SAMANTHA_AUTONOMY_DWELL).
 AUTONOMY_DWELL_SECONDS = 600.0
+# One act turn on miss lines per this many seconds, unless the configuration sets
+# trigger_dwell (SAMANTHA_AUTONOMY_TRIGGER_DWELL).
+TRIGGER_DWELL_SECONDS = 15.0
+# How long a miss waits for the first move that is still being planned.
+PREPARE_WAIT_SECONDS = 60.0
+
+PREPARE_REQUEST = (
+    "Standing approval (SAMANTHA_AUTONOMY=goal): plan your first move now. Nothing "
+    "changes now. The operator marks each program output line that matches the "
+    "regular expression {pattern!r} (SAMANTHA_AUTONOMY_TRIGGER) as a miss against "
+    "the operator goal. At the first miss, the operations that you return now are "
+    "applied at once, with no further model call. Return only set operations on "
+    "declared_knobs paths, with values inside their bounds, that the operator goal "
+    "and the '# daemon:' directives allow and that you predict reduce the misses. "
+    "declared_knobs shows each knob's current value and bounds, so do not inspect "
+    "them. In reply, say in one sentence what the move does and why. If you would "
+    "change nothing after a miss, return no operations and say why."
+)
+TRIGGER_REQUEST = (
+    "Standing approval (SAMANTHA_AUTONOMY=goal): the program printed {count} "
+    "line(s) that match the operator's miss pattern {pattern!r} "
+    "(SAMANTHA_AUTONOMY_TRIGGER) since your last autonomous turn. If the operator "
+    "goal and the '# daemon:' directives allow a change that you predict reduces "
+    "the misses, apply it now; declared_knobs shows each knob's current value and "
+    "bounds, so act in this round. The operator set {dwell:g} s between these "
+    "turns (SAMANTHA_AUTONOMY_TRIGGER_DWELL): that is the dwell and washout for "
+    "this program. Otherwise change nothing and say why."
+)
 
 
 class Cognition:
@@ -106,6 +134,15 @@ class Cognition:
         self.notices: deque[str] = deque(maxlen=20)
         # Series -> time of the last autonomous act turn (SAMANTHA_AUTONOMY=goal).
         self._acted: dict[str, float] = {}
+        # Miss lines (SAMANTHA_AUTONOMY_TRIGGER): the move planned at startup, the
+        # planning state (True while it runs), and the act turn clock.
+        self.preparing = False
+        self.prepared: dict[str, Any] | None = None
+        self._prepare_done = threading.Event()
+        self._trigger_lock = threading.Lock()
+        self._trigger_at = float("-inf")
+        self._trigger_busy = False
+        self._misses = 0
 
     def start(self) -> None:
         threading.Thread(
@@ -131,6 +168,12 @@ class Cognition:
             "provider ready · model=%s · analyzing project source",
             self.resident.config.model,
         )
+        if self._trigger_pattern() and getattr(self.resident, "actuator", None):
+            # In parallel with the cold start, so that it adds no wait.
+            self.preparing = True
+            threading.Thread(
+                target=self._prepare, name="samantha-prepare", daemon=True
+            ).start()
         try:
             self._bootstrap()
             self.analysis_ready = True
@@ -391,6 +434,119 @@ Analyzed {len(inventory.get("files", {}))} project files.
             )
             self.notices.append(f"act failed: {exc}")
             return
+        self.resident.journal.write("chat", direction="out", text=reply)
+        self._notify("acted", {"summary": reply.split("\n\n")[0]})
+
+    # --- miss lines (SAMANTHA_AUTONOMY_TRIGGER) ---------------------------------
+
+    def _trigger_pattern(self) -> str | None:
+        """The miss-line pattern, when goal autonomy in act mode uses one."""
+        cfg = self.resident.config
+        if cfg.mode != "act" or getattr(cfg, "autonomy", "off") != "goal":
+            return None
+        return getattr(cfg, "autonomy_trigger", None)
+
+    def _prepare(self) -> None:
+        """Plan the first move while the program is still healthy (startup)."""
+        log = logging.getLogger("samantha")
+        request = PREPARE_REQUEST.format(pattern=self._trigger_pattern())
+        self.resident.journal.write("chat", direction="auto", text=request)
+        try:
+            move = self.resident.actuator.prepare(request)
+        except Exception as exc:
+            move = None
+            log.warning("first move planning failed (a miss gets a full act turn): %s", exc)
+        try:
+            if move and move.get("operations"):
+                self.prepared = move
+                changes = ", ".join(
+                    f"{op['path'].removeprefix('exposed:')} "
+                    f"{move['planned_against'][op['path']]} → {op['value']}"
+                    for op in move["operations"]
+                )
+                text = f"First move ready (applied at the first miss): {changes}."
+                log.info("first move ready: %s", changes)
+            else:
+                why = (move or {}).get("reply") or "planning failed"
+                text = f"No first move planned: {why}"
+                log.info("no first move planned: %s", why)
+            refused = (move or {}).get("refused")
+            if refused:
+                text += f" Refused: {'; '.join(refused)}."
+            self.resident.journal.write("chat", direction="out", text=text)
+        finally:
+            self.preparing = False
+            self._prepare_done.set()
+
+    def on_trigger(self, line: str) -> bool:
+        """A miss line. Runs on the host thread inside its print or logging call,
+        so it only checks the dwell and starts a thread. True if a turn started.
+        A miss before the model check passed is ignored."""
+        if self.provider_ready is not True or self._trigger_pattern() is None:
+            return False
+        if time.time() < getattr(self.resident, "quiet_until", 0):
+            return False  # samantha.silence()
+        actuator = getattr(self.resident, "actuator", None)
+        if actuator is None:
+            return False
+        dwell = float(getattr(self.resident.config, "trigger_dwell", TRIGGER_DWELL_SECONDS))
+        now = time.time()
+        with self._trigger_lock:
+            self._misses += 1
+            if self._trigger_busy or now - self._trigger_at < dwell:
+                return False  # dwell and washout: one turn per dwell, one at a time
+            self._trigger_at, self._trigger_busy = now, True
+            misses, self._misses = self._misses, 0
+        threading.Thread(
+            target=self._trigger_turn,
+            args=(actuator, misses),
+            name="samantha-autonomy",
+            daemon=True,
+        ).start()
+        return True
+
+    def _trigger_turn(self, actuator: Any, misses: int) -> None:
+        pattern = self._trigger_pattern()
+        try:
+            if self.preparing:
+                # A miss before the first move is ready: that move comes sooner
+                # than a new plan would.
+                self._prepare_done.wait(PREPARE_WAIT_SECONDS)
+            move, self.prepared = self.prepared, None  # the first move is used once
+            reply = None
+            if move:
+                request = (
+                    f"Standing approval (SAMANTHA_AUTONOMY=goal): the first line that "
+                    f"matches the operator's miss pattern {pattern!r} "
+                    "(SAMANTHA_AUTONOMY_TRIGGER) appeared; applying the first move "
+                    "planned at startup."
+                )
+                self.resident.journal.write("chat", direction="auto", text=request)
+                reply = actuator.apply_prepared(move, request)
+                if reply is None:
+                    self.resident.journal.write(
+                        "chat",
+                        direction="out",
+                        text="The first move was not applied: a knob it changes "
+                        "moved after it was planned. Planning again.",
+                    )
+            if reply is None:
+                dwell = float(
+                    getattr(self.resident.config, "trigger_dwell", TRIGGER_DWELL_SECONDS)
+                )
+                request = TRIGGER_REQUEST.format(count=misses, pattern=pattern, dwell=dwell)
+                self.resident.journal.write("chat", direction="auto", text=request)
+                reply = actuator.handle(request, synthesize=False)
+        except Exception as exc:
+            logging.getLogger("samantha").warning("autonomous act turn failed: %s", exc)
+            self.resident.journal.write(
+                "chat", direction="out", text=f"Autonomous act turn failed: {exc}"
+            )
+            self.notices.append(f"act failed: {exc}")
+            return
+        finally:
+            with self._trigger_lock:
+                self._trigger_busy = False
         self.resident.journal.write("chat", direction="out", text=reply)
         self._notify("acted", {"summary": reply.split("\n\n")[0]})
 
