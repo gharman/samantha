@@ -70,7 +70,8 @@ key came from.
 | `SAMANTHA_AUTONOMY` | `off` | `goal`: in act mode, Samantha acts by herself on an unmet goal. |
 | `SAMANTHA_AUTONOMY_DWELL` | `600` | Seconds between two autonomous turns for one series (at least 30). |
 | `SAMANTHA_AUTONOMY_TRIGGER` | none | A regular expression. With `SAMANTHA_AUTONOMY=goal` in act mode, a line of program output that matches it is a miss against the goal ([miss lines](#miss-lines)). |
-| `SAMANTHA_AUTONOMY_TRIGGER_DWELL` | `15` | Seconds between two act turns on miss lines (at least 10). |
+| `SAMANTHA_AUTONOMY_TRIGGER_DWELL` | `15` | Seconds between two act turns on miss or slack lines (at least 10). |
+| `SAMANTHA_AUTONOMY_SLACK` | none | A regular expression. With `SAMANTHA_AUTONOMY=goal` in act mode, a line of program output that matches it says the goal is met with room to spare: Samantha moves one declared knob back toward its starting value ([slack lines](#slack-lines)). |
 | `SAMANTHA_GOAL` | none | The operator goal, in words. |
 | `SAMANTHA_MODEL` | `gpt-5.6-terra` | The model. Samantha uses OpenAI's Responses API. |
 | `SAMANTHA_BASE_URL` | `https://api.openai.com` | The API address (for a proxy or a compatible server). |
@@ -133,8 +134,9 @@ how soon she wakes.
 samantha.expose("learning_rate", obj=cfg, attr="lr", bounds=(1e-5, 0.1))
 ```
 
-The planner sees each declared knob as `exposed:<name>`, with its value and
-bounds, and prefers these paths. A value outside the bounds is refused. Your
+The planner sees each declared knob as `exposed:<name>`, with its value, its
+bounds, and its starting value (the value when `expose()` ran), and prefers
+these paths. A value outside the bounds is refused. Your
 program must read the value again when it uses it (for example each round, or
 each frame); a value that was copied at startup does not change.
 
@@ -167,7 +169,7 @@ autonomous turns run one at a time.
 
 A gap wake comes only after a series stays below its target for 20 to 25
 lines. If your program prints a line at each failure (for example
-`player hit` in the aliens demo), Samantha can act at the first failure. Set
+`too hard: ...` in the aliens demo), Samantha can act at the first failure. Set
 `SAMANTHA_AUTONOMY_TRIGGER` to a regular expression for that line. It has an
 effect only with `SAMANTHA=act` and `SAMANTHA_AUTONOMY=goal`; with other
 settings Samantha ignores it and gives a warning at startup.
@@ -191,6 +193,40 @@ settings Samantha ignores it and gives a warning at startup.
 
 Gap wakes and their autonomous turns continue as before. `samantha.silence()`
 also stops the turns on miss lines.
+
+### Slack lines
+
+Miss lines push in one direction: each one asks for a change that reduces the
+misses. If the goal is a band (for example "hit 0.5 to 2 times per minute, not
+more and not zero"), the program must also say when it has room to spare. Set
+`SAMANTHA_AUTONOMY_SLACK` to a regular expression for that line (for example
+`too easy: ...` in the aliens demo). It has an effect only with `SAMANTHA=act`
+and `SAMANTHA_AUTONOMY=goal`; it does not need `SAMANTHA_AUTONOMY_TRIGGER`.
+
+A slack line gives back one step of the earlier changes:
+
+1. If every declared knob is at its starting value (its value when
+   `samantha.expose()` ran), nothing happens and there is no model call.
+2. Otherwise Samantha plans: one planning call, with the goal, the
+   `# daemon:` directives, the declared knobs with their starting values, and
+   the names of the knobs that are not at their start. No second model call.
+3. She applies at most one `set` on one declared knob, and only a value
+   between the knob's current value and its starting value (it can be the
+   starting value). She refuses all other operations, and her reply lists them.
+   The change goes through the same audited operations as all other changes,
+   with the lifetime `process`, and you can revert it.
+
+So a slack line never moves the program past where it started. Slack lines
+share the dwell of miss lines (`SAMANTHA_AUTONOMY_TRIGGER_DWELL`) and the rule
+"one turn at a time": a slack line inside the dwell does nothing. The program
+decides when it has slack, so make it print the line again later (the aliens
+demo prints it after each 30 s of play with no hit). `samantha.silence()` also
+stops these turns.
+
+Why a line and not a timer in Samantha: only the program knows its own clock
+(the aliens game counts play time, not the time it is paused) and what "room
+to spare" means. Samantha needs no settings for a band, a window, or an idle
+time.
 
 ## Talk to Samantha
 
@@ -257,7 +293,7 @@ The limits:
 - **No code from the model.** No `exec`, `eval`, `compile`, subprocesses,
   process launches, imports, or source file writes.
 - **Act only in act mode,** and only on your request or, with
-  `SAMANTHA_AUTONOMY=goal`, on a goal gap.
+  `SAMANTHA_AUTONOMY=goal`, on a goal gap, a miss line, or a slack line.
 - **Bounds.** A declared knob refuses a value outside its bounds.
 - **Protected paths.** Paths with the segments `eval`, `seed`, `test`, `tests`,
   `ckpt`, or `checkpoint` cannot be changed.
@@ -299,7 +335,8 @@ Python version, the demo packages, and the key (from `.env` or the
 environment). Then it starts the demo with `SAMANTHA=act`,
 `SAMANTHA_AUTONOMY=goal` (`--wait`: `SAMANTHA_AUTONOMY=off`), and
 `SAMANTHA_AUTONOMY_DWELL=90`. For the aliens demo (not with `--wait`) it also
-sets `SAMANTHA_AUTONOMY_TRIGGER=^player hit\b` and
+sets `SAMANTHA_AUTONOMY_TRIGGER=^too hard\b`,
+`SAMANTHA_AUTONOMY_SLACK=^too easy\b`, and
 `SAMANTHA_AUTONOMY_TRIGGER_DWELL=10`. A setting in the environment wins over
 these values, except `SAMANTHA` and `SAMANTHA_AUTONOMY`. Each demo folder
 has its own `pyproject.toml`, so Samantha's project root is the demo program's
@@ -310,30 +347,50 @@ folder, and she reads only that program.
 `examples/aliens/game/aliens.py` is pygame's `examples/aliens.py` (pygame
 2.6.1; it runs on pygame-ce) with these changes:
 
-- `import samantha` and four `# daemon:` lines: the goal (hit less than once
-  per minute), the knobs that are fair game with their ranges, what not to
-  touch (`SCORE`, `SCREENRECT`, and "never make the game harder"), and "when
-  the goal is not met, act at once: change several of these knobs, enough to
-  meet the goal". In earlier live tests without the last line, the model
-  followed its charter ("prefer the smallest nudge"): `help` changed one knob
-  a little (for example `BOMB_ODDS` 60 → 120), which did not help a player who
-  kept getting hit.
+- `import samantha` and six `# daemon:` lines: the goal (a fun game: hit 0.5
+  to 2 times per minute of play, not more and not zero), the knobs that are
+  fair game with their ranges, that the starting values are the hardest
+  allowed and what not to touch (`SCORE`, `SCREENRECT`, `FUN_BAND`,
+  `CRUISE_SECONDS`), the size of a move (a notch is about a quarter of a
+  knob's range; at most two knobs at a time), and what to do on a "too hard"
+  line (one notch easier on one or two knobs) and on a "too easy" line (one
+  notch harder on one knob, back toward its starting value). An earlier
+  directive, "change several of these knobs, enough to meet the goal", made
+  the model's first move set all five knobs to their easy ends, which left
+  nothing to do later.
 - `declare_knobs()`: `samantha.expose()` for the five knobs (`BOMB_ODDS`,
   `MAX_SHOTS`, `ALIEN_ODDS`, `Bomb.speed`, `Alien.speed`), so the ranges are
-  hard limits.
+  hard limits. Each range starts at the game's original value, so no change
+  can make the game harder than the original.
 - The game starts paused while Samantha reads it and plans her first move; P
   pauses and resumes (by key code or typed letter), Space starts, and the game
   pauses when its window loses the keyboard (for example when you click the
   terminal).
 - A hit respawns the player and prints `player hit · deaths: N · score: S`. The
   original game ends at the first hit, and Samantha sees only what the program
-  prints. In the demo this line is a [miss line](#miss-lines): Samantha applies
-  her first move at the first hit, and while the hits continue she can make
-  another act turn every 10 s.
-- Every 2 s of play the game prints the hits in the last minute and
-  `goal met: 0` or `1` `(target 1)`. This line is the metric for the gap
-  sentinel. The hit rate is printed before the words, so it is not a metric
-  with that target.
+  prints.
+- The first hit prints `too hard: the first hit` (the game starts at its
+  hardest), and a hit that makes more than 2 hits in the last minute of play
+  prints `too hard: N hits in the last minute of play`. These are
+  [miss lines](#miss-lines): Samantha applies her first move at the first hit,
+  and later she can make the game easier again, at most every 10 s.
+- After `CRUISE_SECONDS` of play (30 s; the environment variable
+  `ALIENS_CRUISE_SECONDS` changes it) with no hit, the game prints
+  `too easy: N s of play with no hit`, and the clock starts again. These are
+  [slack lines](#slack-lines): Samantha makes the game a notch harder, one
+  knob at a time, until the knobs are back at their starting values.
+- Every 2 s of play the game prints the hits in the last minute of play and
+  where that is against the fun band, for example
+  `1.0 hits per minute (last minute of play) · in the fun band (0.5-2)`. This
+  line is for you: it gives no metric to Samantha's sentinels, so it starts no
+  gap or stall wake.
+
+With the default of 30 s, Samantha steers toward about one hit every 30 s, the
+top of the band: hits that come more often give "too hard" lines (3 in a
+minute), and hits that come less often give "too easy" lines. For a game with
+fewer hits, set `ALIENS_CRUISE_SECONDS` higher. Then hits that come every 30 s
+to every `ALIENS_CRUISE_SECONDS` get no change: with 60, 1 to 2 hits per
+minute; with 120, the whole band of 0.5 to 2.
 - If there is no `data/` folder next to `aliens.py`, the game loads the images
   and sounds of the installed pygame-ce. This repository does not include them.
 
@@ -345,15 +402,29 @@ attribute assignment is atomic in CPython.
 `examples/aliens/play.py` runs the game unchanged and adds the panel under it:
 Samantha's state, her flags and questions, her reply when a turn changes
 nothing, and a green line for each change she makes (it compares the five
-knobs on each frame). The same lines go to the terminal as
-`[demo] Samantha changed ...`. `play.py` is outside the game's project root, so
+knobs on each frame), marked `(easier)` or `(harder)`. Harder means each knob
+moved back toward its starting value; then the panel also shows a playful
+line, for example "You're cruising. Bringing the aliens back." The panel writes
+these lines, not the model. The same lines go to the terminal as
+`[demo] Samantha ...`. `play.py` is outside the game's project root, so
 Samantha does not read or change it.
 
-The timing in live runs (gpt-5.6-terra, a scripted player, 2026-10-10): the
-theory call took 16 to 18 s and the first-move plan 5 to 6 s, at the same
-time. The green line came 0.1 to 0.2 s after the first hit. In these runs the
-model's first move set all five knobs to the easy end of their ranges, so a
-later hit got a turn that changed nothing (its planning call took 3 s).
+Two live runs (gpt-5.6-terra, the scripted player of `tests/stories`,
+2026-10-10, 11 model calls in total):
+
+- The theory call took 21 s and the first-move plan 5 to 6 s, at the same
+  time. Each first move was one notch on two knobs (`ALIEN_ODDS` 22 → 42 and
+  `BOMB_ODDS` 60 → 195; then `BOMB_ODDS` 60 → 195 and `Bomb.speed` 9 → 7). The
+  green line came 0.10 s after the first hit.
+- A player who was not hit after the first change (`--dodge`): each "too
+  easy" line gave back one knob, 4.7 to 6.2 s after the line (one planning
+  call): `ALIEN_ODDS` 42 → 32 → 22, then `BOMB_ODDS` 195 → 60. Then the knobs
+  were at their starting values, and the next "too easy" line made no model
+  call.
+- The weak player: after 30 s with no hit, `BOMB_ODDS` went back to 60. Then
+  the hits came back (3 to 5 in a minute), and three "too hard" turns made the
+  game easier, one knob each, 12 to 13 s apart (`Bomb.speed` 7 → 5,
+  `ALIEN_ODDS` 22 → 42, `MAX_SHOTS` 2 → 4).
 
 License: pygame's README says "The programs in the `examples` subdirectory are
 in the public domain" (pygame-ce's README says the same). The changes have the
@@ -398,7 +469,9 @@ extra.
 `tests/stories/` has the demos as unattended stories with a scripted model
 (text that starts with "(scripted model)") and, for the game, a scripted
 player. Only the tests use them; they are not a way to run the demos without
-a key. `RUN_EXAMPLE_STORIES=1` runs them (about 1 minute).
+a key. `RUN_EXAMPLE_STORIES=1` runs them (about 3 minutes). The aliens story
+has a mode in which the player is not hit after Samantha's first change
+(`--dodge`), to test the "too easy" lines.
 
 ## Platform notes
 
