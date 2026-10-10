@@ -1,7 +1,9 @@
+import importlib.util
 import io
 import json
 import queue
 import sys
+import threading
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -638,6 +640,73 @@ def test_shared_objects_resolve_through_every_path(
     finally:
         module.state["stop"] = True
         thread.join(1)
+
+
+def pool_app(tmp_path: Path, monkeypatch: object) -> types.ModuleType:
+    """A service object held by the main thread and by a request-handling worker."""
+    source = tmp_path / "pool_app.py"
+    source.write_text(
+        "class Service:\n"
+        "    def __init__(self):\n"
+        "        self.limit = 1\n"
+        "service = Service()\n"
+        "def handle(service, entered, release):\n"
+        "    entered.set()\n"
+        "    release.wait(5)\n"
+        "def serve(service, refresh):\n"
+        "    return refresh()\n"
+    )
+    spec = importlib.util.spec_from_file_location("pool_app", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setitem(sys.modules, "pool_app", module)
+    return module
+
+
+def start_request(module: types.ModuleType) -> tuple[threading.Thread, object]:
+    entered, release = threading.Event(), threading.Event()
+    worker = threading.Thread(
+        target=module.handle, args=(module.service, entered, release), daemon=True
+    )
+    worker.start()
+    assert entered.wait(2)
+    return worker, release
+
+
+def test_paths_through_a_finished_worker_still_resolve(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = pool_app(tmp_path, monkeypatch)
+    worker, release = start_request(module)
+    graph = RuntimeGraph(tmp_path).refresh()
+    planned = next(
+        path
+        for path in graph.nodes
+        if path.startswith("frame:") and path.endswith("::service/limit")
+    )
+    release.set()
+    worker.join(2)
+    graph.refresh()
+    assert planned not in graph.nodes
+    node = graph.get(planned)
+    node.write(5)
+    assert module.service.limit == 5
+
+
+def test_objects_shared_with_the_main_thread_are_named_through_it(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = pool_app(tmp_path, monkeypatch)
+    worker, release = start_request(module)
+    try:
+        graph = RuntimeGraph(tmp_path)
+        module.serve(module.service, graph.refresh)
+        main = threading.main_thread().ident
+        described = graph.describe("module:pool_app::service")
+        assert described["same_object_as"].startswith(f"frame:{main}:serve:")
+    finally:
+        release.set()
+        worker.join(2)
 
 
 def test_methods_of_live_objects_are_callable_and_interceptable(
