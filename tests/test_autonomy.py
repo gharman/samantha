@@ -185,10 +185,12 @@ def test_daemon_goal_directive_is_the_goal_when_none_is_set(
     samantha.expose("rare_weight", obj=settings, attr="rare", bounds=(0.1, 5.0))
     current.cognition.wake(WakeEvent("stall", {"series": "x"}))
     assert "fair game, live: BOMB_ODDS 60-600" in prompts[0]
-    # ... and the declared knobs, with their current values and bounds.
-    sent = json.loads(prompts[0][prompts[0].rindex('{"event"'):])
+    # ... and the declared knobs, with their current and starting values and bounds.
+    settings.rare = 2.0
+    current.cognition.wake(WakeEvent("stall", {"series": "y"}))
+    sent = json.loads(prompts[1][prompts[1].rindex('{"event"'):])
     assert sent["declared_knobs"] == [
-        {"name": "rare_weight", "value": 1.0, "bounds": [0.1, 5.0]}
+        {"name": "rare_weight", "value": 2.0, "bounds": [0.1, 5.0], "start": 1.0}
     ]
 
 
@@ -425,14 +427,15 @@ def test_runtime_rearms_gap_only_for_goal_autonomy_in_act_mode(
     ]:
         current = SimpleNamespace(
             config=Config(mode=mode, autonomy=autonomy, autonomy_dwell=dwell,
-                          autonomy_trigger="^player hit"),
+                          autonomy_trigger="^player hit", autonomy_slack="^too easy"),
             observer=SimpleNamespace(metrics=MetricStore()),
             stop=lambda: None,
         )
         _start_runtime(current)
         assert current.sentinels.rearm == rearm
-        # Miss lines count only under goal autonomy in act mode.
+        # Miss lines and slack lines count only under goal autonomy in act mode.
         assert (current.trigger is not None) == bool(rearm)
+        assert (current.slack is not None) == bool(rearm)
 
 
 # --- miss lines (SAMANTHA_AUTONOMY_TRIGGER) --------------------------------------
@@ -653,3 +656,209 @@ def test_trigger_settings_are_resolved_and_validated(
     config = Config.resolve(_dotenv_start=tmp_path)
     assert config.autonomy_trigger is None
     assert any("needs SAMANTHA=act" in w for w in config.warnings)
+
+
+# --- slack lines (SAMANTHA_AUTONOMY_SLACK) -----------------------------------------
+
+
+class SlackLLM:
+    """Each plan sets the (path, value_json) pairs of the next entry in plans."""
+
+    def __init__(self, *plans: list[tuple[str, str]]) -> None:
+        self.plans = list(plans)
+        self.contexts: list[dict] = []
+        self.chats = 0
+
+    def complete(self, messages: object, signature: str = "default") -> dict:
+        return {"assessment": "ok", "actions": []}
+
+    def chat(self, messages: object) -> str:
+        self.chats += 1
+        return "synthesized"
+
+    def plan_action(self, messages: list[dict]) -> dict[str, object]:
+        self.contexts.append(json.loads(messages[0]["content"]))
+        pairs = self.plans.pop(0) if self.plans else []
+        operations = [
+            {"op": "set", "effect": "write", "path": path, "query": None,
+             "value_json": value, "args_json": None, "kwargs_json": None,
+             "lifetime": "temporary", "duration_s": 1, "reason": "room to spare"}
+            for path, value in pairs
+        ]
+        # "temporary" would undo a give-back by itself; slack turns use "process".
+        return {"intent": "act", "reply": "one notch back", "done": True,
+                "lifetime": "temporary", "operations": operations}
+
+
+def slack_resident(tmp_path: Path, monkeypatch: object, llm: SlackLLM,
+                   autonomy: str = "goal"):
+    """Two knobs that start at speed 1 and size 10, with room on both sides."""
+    import samantha
+
+    knobs = SimpleNamespace(speed=1, size=10)
+    monkeypatch.setattr(samantha, "_exposures", {})
+    samantha.expose("speed", obj=knobs, attr="speed", bounds=(0, 9))
+    samantha.expose("size", obj=knobs, attr="size", bounds=(0, 20))
+    speed_module(tmp_path, monkeypatch)
+    config = SimpleNamespace(
+        mode="act", autonomy=autonomy, max_wakes_per_hour=0, token_budget_per_day=0,
+        flag_budget=0, act_max_rounds=4, model="test-model", goal="fun",
+        autonomy_trigger="^too hard", autonomy_slack="^too easy", trigger_dwell=10.0,
+    )
+    current = SimpleNamespace(
+        config=config, journal=Journal(tmp_path, "run"),
+        ledger=Ledger(tmp_path / "ledger.json"), state=tmp_path, root=tmp_path,
+    )
+    current.actuator = ActController(current, llm)
+    current.cognition = Cognition(current, llm)
+    current.cognition.provider_ready = True
+    return current, knobs
+
+
+def test_expose_records_the_starting_value(tmp_path: Path, monkeypatch: object) -> None:
+    import samantha
+    from samantha.act.runtime import RuntimeOperator
+
+    current, knobs = slack_resident(tmp_path, monkeypatch, SlackLLM())
+    knobs.speed = 7
+    assert samantha._exposures["speed"].start == 1  # the value at expose()
+    operator = RuntimeOperator(current)
+    operator.inventory()
+    starts = {k["path"]: (k["preview"], k["start"]) for k in operator.declared_knobs()}
+    assert starts == {"exposed:speed": ("7", 1), "exposed:size": ("10", 10)}
+    samantha.expose("hook", setter=lambda value: None)
+    assert samantha._exposures["hook"].start is None
+    assert current.actuator.off_start() == ["speed"]
+
+
+def test_slack_line_does_nothing_while_every_knob_is_at_its_start(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    llm = SlackLLM([("exposed:speed", "0")])
+    current, knobs = slack_resident(tmp_path, monkeypatch, llm)
+    assert current.cognition.on_slack("too easy: 30 s of play with no hit") is False
+    settle()
+    assert llm.contexts == [] and knobs.speed == 1  # no model call
+    assert current.cognition._trigger_at == float("-inf")  # the dwell clock did not start
+
+
+def test_slack_line_gives_back_one_knob_toward_its_start(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    llm = SlackLLM([("exposed:speed", "4"), ("exposed:size", "12")])
+    current, knobs = slack_resident(tmp_path, monkeypatch, llm)
+    knobs.speed, knobs.size = 7, 16  # earlier changes
+    assert current.cognition.on_slack("too easy: 30 s of play with no hit") is True
+    settle()
+    assert (knobs.speed, knobs.size) == (4, 16)  # one knob only
+    assert len(llm.contexts) == 1 and llm.chats == 0  # one planning call, no synthesis
+    request = llm.contexts[0]["operator_request"]
+    assert "slack pattern '^too easy'" in request and "speed, size" in request
+    assert {k["path"]: k["start"] for k in llm.contexts[0]["declared_knobs"]} == {
+        "exposed:speed": 1, "exposed:size": 10}
+    rows = [r for r in journal_rows(current) if r["type"] == "chat"]
+    assert rows[-2]["direction"] == "auto" and rows[-1]["direction"] == "out"
+    assert rows[-1]["text"].startswith("Applied runtime intervention")
+    assert "exposed:size: one knob per slack turn" in rows[-1]["text"]
+    assert any(n.startswith("acted: Applied runtime intervention") for n in
+               current.cognition.notices)
+    # Audited and revertible like any other change, and it does not expire.
+    (group,) = current.actuator.runtime.groups.values()
+    assert group.lifetime == "process"
+    assert current.actuator.runtime.revert(group.id) and knobs.speed == 7
+
+
+def test_slack_line_never_moves_a_knob_past_its_start(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    # In bounds but past the start (1), away from the start, then exactly the start.
+    llm = SlackLLM([("exposed:speed", "0")], [("exposed:speed", "8")],
+                   [("exposed:speed", "1")])
+    current, knobs = slack_resident(tmp_path, monkeypatch, llm)
+    cog = current.cognition
+    knobs.speed = 7
+    for expected in (7, 7, 1):
+        cog._trigger_at = float("-inf")  # past the dwell
+        assert cog.on_slack("too easy") is True
+        settle()
+        assert knobs.speed == expected
+    texts = [r["text"] for r in journal_rows(current)
+             if r["type"] == "chat" and r["direction"] == "out"]
+    assert "without going past it" in texts[0] and "without going past it" in texts[1]
+    assert texts[2].startswith("Applied runtime intervention")
+    cog._trigger_at = float("-inf")
+    assert cog.on_slack("too easy") is False  # back at the start: nothing to give back
+    assert len(llm.contexts) == 3
+
+
+def test_slack_and_miss_lines_share_the_dwell(tmp_path: Path, monkeypatch: object) -> None:
+    llm = SlackLLM([], [("exposed:speed", "4")])  # the miss turn changes nothing
+    current, knobs = slack_resident(tmp_path, monkeypatch, llm)
+    cog = current.cognition
+    knobs.speed = 7
+    assert cog.on_trigger("too hard: 3 hits") is True
+    settle()
+    assert cog.on_slack("too easy") is False  # inside the dwell of the miss turn
+    cog._trigger_at -= 10
+    assert cog.on_slack("too easy") is True
+    settle()
+    assert knobs.speed == 4
+    assert cog.on_trigger("too hard: 3 hits") is False  # inside the slack turn's dwell
+
+
+def test_slack_lines_do_nothing_without_goal_autonomy(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    llm = SlackLLM([("exposed:speed", "4")])
+    current, knobs = slack_resident(tmp_path, monkeypatch, llm, autonomy="off")
+    knobs.speed = 7
+    assert current.cognition.on_slack("too easy") is False
+    current.cognition.resident.config.autonomy = "goal"
+    current.quiet_until = time.time() + 60  # samantha.silence()
+    assert current.cognition.on_slack("too easy") is False
+    settle()
+    assert knobs.speed == 7 and llm.contexts == []
+
+
+def test_inspect_sends_slack_lines_past_the_wake_queue() -> None:
+    import re
+
+    from samantha._boot import _inspect
+
+    seen: list[tuple[str, str]] = []
+    current = SimpleNamespace(
+        trigger=re.compile("^too hard"),
+        slack=re.compile("^too easy"),
+        cognition=SimpleNamespace(on_trigger=lambda t: seen.append(("miss", t)),
+                                  on_slack=lambda t: seen.append(("slack", t)),
+                                  submit=lambda event: None),
+        sentinels=Sentinels(MetricStore()),
+        journal=SimpleNamespace(write=lambda *a, **k: None),
+    )
+    _inspect(current, "too hard: the first hit")
+    _inspect(current, "too easy: 30 s of play with no hit")
+    _inspect(current, "1.0 hits per minute (last minute of play) · in the fun band (0.5-2)")
+    assert seen == [("miss", "too hard: the first hit"),
+                    ("slack", "too easy: 30 s of play with no hit")]
+
+
+def test_slack_setting_is_resolved_and_validated(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SAMANTHA_AUTONOMY_SLACK", raising=False)
+    monkeypatch.setenv("SAMANTHA", "act")
+    monkeypatch.setenv("SAMANTHA_AUTONOMY", "goal")
+    assert Config.resolve(_dotenv_start=tmp_path).autonomy_slack is None  # the default
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_SLACK", r"^too easy\b")
+    assert Config.resolve(_dotenv_start=tmp_path).autonomy_slack == r"^too easy\b"
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_SLACK", "too (easy")
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.autonomy_slack is None
+    assert any("SAMANTHA_AUTONOMY_SLACK" in w and "not a valid regular expression" in w
+               for w in config.warnings)
+    monkeypatch.setenv("SAMANTHA_AUTONOMY_SLACK", "^too easy")
+    monkeypatch.setenv("SAMANTHA", "advise")
+    config = Config.resolve(_dotenv_start=tmp_path)
+    assert config.autonomy_slack is None
+    assert any("SAMANTHA_AUTONOMY_SLACK needs SAMANTHA=act" in w for w in config.warnings)

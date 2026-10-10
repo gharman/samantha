@@ -51,6 +51,11 @@ class Config:
     # a move planned at startup; later misses get act turns, one per trigger_dwell.
     autonomy_trigger: str | None = None
     trigger_dwell: float = DEFAULT_TRIGGER_DWELL
+    # A regular expression: a program output line that matches it says the goal is
+    # met with room to spare (goal autonomy in act mode only). It gets an act turn
+    # that moves one declared knob back toward its starting value, never past it.
+    # It shares trigger_dwell with miss lines.
+    autonomy_slack: str | None = None
     log_level: str = "INFO"
     warnings: list[str] = field(default_factory=list)
 
@@ -93,6 +98,7 @@ class Config:
             trigger_dwell=number(
                 "SAMANTHA_AUTONOMY_TRIGGER_DWELL", float, DEFAULT_TRIGGER_DWELL
             ),
+            autonomy_slack=(env("SAMANTHA_AUTONOMY_SLACK") or "").strip() or None,
             log_level=(
                 "OFF"
                 if _truthy(env("SAMANTHA_QUIET"))
@@ -121,23 +127,26 @@ class Config:
                 f"{MIN_TRIGGER_DWELL} seconds; using {MIN_TRIGGER_DWELL}"
             )
             values["trigger_dwell"] = float(MIN_TRIGGER_DWELL)
-        if trigger := values["autonomy_trigger"]:
-            try:
-                re.compile(trigger)
-            except re.error as exc:
-                warnings.append(
-                    f"SAMANTHA_AUTONOMY_TRIGGER={trigger!r} is not a valid regular "
-                    f"expression ({exc}); ignoring it"
-                )
-                values["autonomy_trigger"] = None
-        if values["autonomy_trigger"] and not (
-            values["mode"] == "act" and values["autonomy"] == "goal"
+        for key, name in (
+            ("autonomy_trigger", "SAMANTHA_AUTONOMY_TRIGGER"),
+            ("autonomy_slack", "SAMANTHA_AUTONOMY_SLACK"),
         ):
-            warnings.append(
-                "SAMANTHA_AUTONOMY_TRIGGER needs SAMANTHA=act and "
-                "SAMANTHA_AUTONOMY=goal; ignoring it"
-            )
-            values["autonomy_trigger"] = None
+            if pattern := values[key]:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    warnings.append(
+                        f"{name}={pattern!r} is not a valid regular expression "
+                        f"({exc}); ignoring it"
+                    )
+                    values[key] = None
+            if values[key] and not (
+                values["mode"] == "act" and values["autonomy"] == "goal"
+            ):
+                warnings.append(
+                    f"{name} needs SAMANTHA=act and SAMANTHA_AUTONOMY=goal; ignoring it"
+                )
+                values[key] = None
         return cls(**values)
 
 
@@ -374,6 +383,15 @@ def _start_runtime(current: Resident) -> None:
                 trigger,
                 float(getattr(current.config, "trigger_dwell", DEFAULT_TRIGGER_DWELL)),
             )
+        slack = getattr(current.config, "autonomy_slack", None)
+        current.slack = re.compile(slack) if autonomous and slack else None
+        if current.slack is not None:
+            LOG.info(
+                "slack lines: /%s/ · each can move one declared knob back toward its "
+                "starting value (never past it) · same %g s dwell as miss lines",
+                slack,
+                float(getattr(current.config, "trigger_dwell", DEFAULT_TRIGGER_DWELL)),
+            )
         if current.config.api_key and current.config.mode in {"advise", "act"}:
             current.cognition = Cognition(
                 current,
@@ -411,6 +429,11 @@ def _inspect(current: Resident, text: str) -> None:
         # runs on its own thread; this call returns at once.
         if cognition := getattr(current, "cognition", None):
             cognition.on_trigger(text)
+    slack = getattr(current, "slack", None)
+    if slack is not None and slack.search(text):
+        # A slack line (SAMANTHA_AUTONOMY_SLACK): past the wake queue too.
+        if cognition := getattr(current, "cognition", None):
+            cognition.on_slack(text)
     events = current.sentinels.inspect_line(text)
     events.extend(current.sentinels.inspect_metrics())
     for event in events:

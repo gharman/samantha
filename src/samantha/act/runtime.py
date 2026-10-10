@@ -94,6 +94,8 @@ class RuntimeOperator:
                 bounds=node.parent.bounds,
                 kind=node.parent.kind,
                 protected=bool(self._protected(path)),
+                # The value when the host declared it (samantha.expose).
+                start=_json_safe(getattr(node.parent, "start", None)),
             )
             knobs.append(item)
         return knobs
