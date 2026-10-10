@@ -12,7 +12,7 @@ from typing import Any, Callable
 from ._boot import _truthy, arm, resident
 from .state import redact
 
-__version__ = "1.0.0"
+__version__ = "0.1.0"
 _exposures: dict[str, "Exposure"] = {}
 
 
