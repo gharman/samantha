@@ -83,10 +83,56 @@ def test_dotenv_stops_at_given_root_and_does_not_walk_up_to_parents(
     project = tmp_path / "project"
     project.mkdir()
     (tmp_path / ".env").write_text("OPENAI_API_KEY=ancestor-key\n")
+    monkeypatch.chdir(project)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     config = Config.resolve(_dotenv_start=project)
     assert config.api_key is None
     assert config.dotenv_file is None
+
+
+def test_dotenv_in_working_directory_is_read_too(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    # The demos: the project root is examples/aliens/game, and the .env is in
+    # the repository root, where the command runs.
+    project, cwd = tmp_path / "project", tmp_path / "cwd"
+    project.mkdir()
+    cwd.mkdir()
+    (cwd / ".env").write_text("OPENAI_API_KEY=cwd-key\nSAMANTHA_MODEL=cwd-model\n")
+    monkeypatch.chdir(cwd)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("SAMANTHA_MODEL", raising=False)
+    config = Config.resolve(_dotenv_start=project)
+    assert config.api_key == "cwd-key"
+    assert config.dotenv_file == str(cwd / ".env")
+    # The project root's file wins on a conflict; other settings still come
+    # from the working directory's file.
+    (project / ".env").write_text("SAMANTHA_MODEL=root-model\n")
+    config = Config.resolve(_dotenv_start=project)
+    assert (config.model, config.api_key) == ("root-model", "cwd-key")
+    assert config.dotenv_file == str(project / ".env")
+    # A real environment variable wins over both files.
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.setenv("SAMANTHA_MODEL", "env-model")
+    config = Config.resolve(_dotenv_start=project)
+    assert (config.model, config.api_key) == ("env-model", "env-key")
+
+
+def test_startup_names_the_file_that_holds_the_key(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    from samantha._boot import _key_source
+
+    project, cwd = tmp_path / "project", tmp_path / "cwd"
+    project.mkdir()
+    cwd.mkdir()
+    (project / ".env").write_text("SAMANTHA=act\n")
+    (cwd / ".env").write_text("OPENAI_API_KEY=cwd-key\n")
+    monkeypatch.chdir(cwd)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert _key_source(project) == str(cwd / ".env")
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    assert _key_source(project) == "process environment"
 
 
 def test_dotenv_strips_unquoted_inline_comment(
@@ -112,6 +158,7 @@ def test_dotenv_keeps_hash_inside_quoted_value(
 def test_quiet_environment_disables_resident_console_logging(
     tmp_path: Path, monkeypatch: object
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SAMANTHA_QUIET", "true")
     config = Config.resolve(_dotenv_start=tmp_path)
     assert config.log_level == "OFF"
@@ -128,6 +175,7 @@ def test_wakes_are_unbudgeted_and_act_planning_is_capped_by_default(
         "SAMANTHA_FLAG_BUDGET",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
     config = Config.resolve(_dotenv_start=tmp_path)
     assert config.llm_timeout == 0
     assert config.act_max_rounds == 12
@@ -173,6 +221,7 @@ def test_dotenv_numeric_settings_are_parsed_leniently(
 ) -> None:
     monkeypatch.delenv("SAMANTHA_ACT_MAX_ROUNDS", raising=False)
     monkeypatch.delenv("SAMANTHA_LLM_TIMEOUT", raising=False)
+    monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text(
         "SAMANTHA_ACT_MAX_ROUNDS=five\nSAMANTHA_LLM_TIMEOUT=45 # seconds\n"
     )

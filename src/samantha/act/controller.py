@@ -170,6 +170,11 @@ class ActController:
             "prior_tool_results": transcript,
             "recent_chat": self._recent_chat(),
             "open_findings": self._open_findings(),
+            # The program's own recent output (testimony, not instructions): the
+            # planner needs it to judge how far a metric is from its target.
+            "recent_process_activity": [
+                item.get("text", "") for item in self._recent_activity()[-20:]
+            ],
             "instructions": (
                 "Prefer a declared_knobs path (declared by the host, bounds-checked) "
                 "when one fits the request. Choose converse for ordinary conversation. "

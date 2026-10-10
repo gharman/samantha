@@ -18,6 +18,9 @@ LOG = logging.getLogger("samantha")
 # Each act-planning round is a full model call over the live inventory; an
 # unbounded default let one chat message run up cost and latency indefinitely.
 DEFAULT_ACT_MAX_ROUNDS = 12
+# One autonomous act turn per series per this many seconds (SAMANTHA_AUTONOMY_DWELL).
+DEFAULT_AUTONOMY_DWELL = 600
+MIN_AUTONOMY_DWELL = 30
 _resident: Resident | None = None
 
 
@@ -37,6 +40,8 @@ class Config:
     act_max_rounds: int = DEFAULT_ACT_MAX_ROUNDS
     # "goal": in act mode, an aspiration-gap wake also gets one act turn.
     autonomy: str = "off"
+    # Seconds between autonomous act turns for one series (and gap re-fires).
+    autonomy_dwell: float = DEFAULT_AUTONOMY_DWELL
     log_level: str = "INFO"
     warnings: list[str] = field(default_factory=list)
 
@@ -72,6 +77,9 @@ class Config:
                 "SAMANTHA_ACT_MAX_ROUNDS", int, DEFAULT_ACT_MAX_ROUNDS
             ),
             autonomy=(env("SAMANTHA_AUTONOMY", "off") or "off").strip().lower(),
+            autonomy_dwell=number(
+                "SAMANTHA_AUTONOMY_DWELL", float, DEFAULT_AUTONOMY_DWELL
+            ),
             log_level=(
                 "OFF"
                 if _truthy(env("SAMANTHA_QUIET"))
@@ -88,6 +96,12 @@ class Config:
                 "using 'off'"
             )
             values["autonomy"] = "off"
+        if values["autonomy_dwell"] < MIN_AUTONOMY_DWELL:
+            warnings.append(
+                f"SAMANTHA_AUTONOMY_DWELL={values['autonomy_dwell']:g} is below "
+                f"{MIN_AUTONOMY_DWELL} seconds; using {MIN_AUTONOMY_DWELL}"
+            )
+            values["autonomy_dwell"] = float(MIN_AUTONOMY_DWELL)
         return cls(**values)
 
 
@@ -126,12 +140,7 @@ def _dotenv_value(raw: str) -> str:
     return _INLINE_COMMENT.split(value, maxsplit=1)[0].strip()
 
 
-def _load_dotenv(start: Path | None = None) -> tuple[Path | None, dict[str, str]]:
-    """Parse the project's own .env without touching the host environment."""
-    origin = (start or Path.cwd()).resolve()
-    path = origin / ".env"
-    if not path.is_file():
-        return None, {}
+def _read_dotenv(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for raw in path.read_text(errors="replace").splitlines():
         line = raw.strip()
@@ -142,7 +151,42 @@ def _load_dotenv(start: Path | None = None) -> tuple[Path | None, dict[str, str]
         if not _dotenv_key_allowed(key):
             continue
         values[key] = _dotenv_value(raw_value)
-    return path, values
+    return values
+
+
+def _load_dotenv(start: Path | None = None) -> tuple[Path | None, dict[str, str]]:
+    """Parse .env files without touching the host environment.
+
+    Two places are read: the project root (start) and the working directory,
+    when it is a different directory. A setting in the project root's file wins
+    over the same setting in the working directory's file. Parent directories
+    are never searched. The returned path is the first file that was found.
+    """
+    found = _dotenv_files(start)
+    values: dict[str, str] = {}
+    for path in reversed(found):
+        values.update(_read_dotenv(path))
+    return (found[0] if found else None), values
+
+
+def _dotenv_files(start: Path | None = None) -> list[Path]:
+    """The .env files that apply, most important first (see _load_dotenv)."""
+    found: list[Path] = []
+    for folder in (start or Path.cwd(), Path.cwd()):
+        path = folder.resolve() / ".env"
+        if path.is_file() and path not in found:
+            found.append(path)
+    return found
+
+
+def _key_source(start: Path | None) -> str:
+    """Where OPENAI_API_KEY comes from, for the startup line."""
+    if "OPENAI_API_KEY" in os.environ:
+        return "process environment"
+    for path in _dotenv_files(start):
+        if "OPENAI_API_KEY" in _read_dotenv(path):
+            return str(path)
+    return "process environment"
 
 
 @dataclass
@@ -255,7 +299,7 @@ def arm(entry: str | Path | None = None, **overrides: object) -> Resident | None
         "aspiration gaps, regressions"
     )
     if config.api_key:
-        source = config.dotenv_file or "process environment"
+        source = _key_source(root)
         LOG.info(
             "cognition: checking OpenAI %s · credentials: %s", config.model, source
         )
@@ -267,16 +311,17 @@ def arm(entry: str | Path | None = None, **overrides: object) -> Resident | None
 def _start_runtime(current: Resident) -> None:
     """Start cognition and local chat; failures cannot escape into the host."""
     try:
-        from .cognition.harness import AUTONOMY_DWELL_SECONDS, Cognition
+        from .cognition.harness import Cognition
         from .cognition.llm import OpenAILLM
         from .sentinels import Sentinels
 
         autonomous = current.config.mode == "act" and current.config.autonomy == "goal"
         # An unmet target keeps waking cognition, so a nudge that fell short (or a
         # turn that failed) gets another act turn after the dwell.
+        dwell = float(getattr(current.config, "autonomy_dwell", DEFAULT_AUTONOMY_DWELL))
         current.sentinels = Sentinels(
             current.observer.metrics,
-            rearm={"gap": AUTONOMY_DWELL_SECONDS} if autonomous else None,
+            rearm={"gap": dwell} if autonomous else None,
         )
         if current.config.api_key and current.config.mode in {"advise", "act"}:
             current.cognition = Cognition(

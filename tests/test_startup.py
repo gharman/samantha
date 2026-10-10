@@ -104,6 +104,7 @@ def test_malformed_numeric_settings_fall_back_with_warning(
     monkeypatch.setenv("SAMANTHA_ACT_MAX_ROUNDS", "five")
     monkeypatch.setenv("SAMANTHA_LLM_TIMEOUT", "30s")
     monkeypatch.setenv("SAMANTHA_FLAG_BUDGET", " 7 ")
+    monkeypatch.chdir(tmp_path)
     config = Config.resolve(_dotenv_start=tmp_path)
     assert config.act_max_rounds == 12
     assert config.llm_timeout == 0
