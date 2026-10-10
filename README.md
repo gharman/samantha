@@ -28,10 +28,12 @@ also works (`export OPENAI_API_KEY=sk-...`), and it wins over `.env`.
 python demo.py aliens
 ```
 
-pygame's alien shooter. When Samantha has read the game (about 20 s), press P
-to play: arrows move, Space fires, Esc quits. Her messages show under the game
-and in the terminal. If you keep getting hit, she makes the game easier while
-you play. Look for the green line "Samantha changed ...", after about a minute.
+pygame's alien shooter. Samantha reads the game and plans her first move (about
+20 s). Then press P to play: arrows move, Space fires, Esc quits. Her messages
+show under the game and in the terminal. While you do not get hit, she does
+nothing. When you get hit the first time, she makes the game easier at once:
+look for the green line "Samantha changed ...", less than 1 s after the hit.
+If the hits continue, she can change the game again, at most once every 10 s.
 
 ## Demo 2: Samantha fixes a training run
 
