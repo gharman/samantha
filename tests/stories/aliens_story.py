@@ -469,7 +469,8 @@ def main(argv: list[str] | None = None) -> int:
     server = None
     state = Path(args.out) / f"state-{time.strftime('%Y%m%d-%H%M%S')}"
     if args.samantha != "off":
-        os.environ.update(SAMANTHA_STATE_DIR=str(state), SAMANTHA_GOAL=GOAL,
+        # As demo.py: no SAMANTHA_GOAL; the goal is the game's '# daemon: goal' line.
+        os.environ.update(SAMANTHA_STATE_DIR=str(state),
                           SAMANTHA_AUTONOMY="off" if args.wait else "goal")
         os.environ.setdefault("SAMANTHA_AUTONOMY_DWELL", "90")  # as demo.py
         if not args.live:

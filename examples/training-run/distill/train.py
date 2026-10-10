@@ -55,7 +55,7 @@ sampling_weights = SamplingWeights()
 
 
 class SamanthaSaid(logging.Handler):
-    """Keep Samantha's flags, questions, and proposals for the plot."""
+    """Keep Samantha's flags, questions, proposals, and changes for the plot."""
 
     def __init__(self) -> None:
         super().__init__(logging.INFO)
@@ -65,6 +65,13 @@ class SamanthaSaid(logging.Handler):
         kind, _, text = record.getMessage().partition(": ")
         if kind in ("flag", "question", "proposal") and text:
             self.lines.append(f"Samantha ({kind}): {' '.join(text.split())}")
+        elif kind == "acted":
+            # "✓ set exposed:sampling_weights.rare: assignment verified → 5.0"
+            done = [line[2:].split(": ", 1)[0].partition(" ")[2].removeprefix("exposed:")
+                    + " → " + line.rsplit("→", 1)[1].strip()
+                    for line in text.splitlines() if line.startswith("✓ ") and "→" in line]
+            if done:
+                self.lines.append("Samantha (changed, live): " + ", ".join(done))
 
 
 said = SamanthaSaid()
@@ -255,11 +262,16 @@ class Plot:
             moved = [f"{r} {change['from'][r]:g} → {change['to'][r]:g}" for r in REGIONS
                      if change["from"][r] != change["to"][r]]
             label = "Samantha set sampling_weights " + ", ".join(moved) + " (live, no restart)"
-            late = change["round"] > 0.5 * max(rounds[-1], 1)  # put the label left of the line
-            top.annotate(label, xy=(change["round"], 1.0), xycoords=("data", "axes fraction"),
-                         xytext=(-6 if late else 6, -16), textcoords="offset points",
-                         ha="right" if late else "left", color="#8172B2",
-                         fontsize=11, fontweight="bold")
+            # In the empty lower part of the fidelity panel; left of the line when
+            # the line is in the right half.
+            late = change["round"] > 0.55 * max(rounds[-1], 1)
+            bottom.annotate(label, xy=(change["round"], 0.1),
+                            xycoords=("data", "axes fraction"),
+                            xytext=(-8 if late else 8, 0), textcoords="offset points",
+                            ha="right" if late else "left", va="center", color="#5b4a99",
+                            fontsize=11, fontweight="bold",
+                            bbox={"boxstyle": "round,pad=0.3", "fc": "white",
+                                  "ec": "#8172B2", "alpha": 0.9})
         now = history["weights"][-1]
         fig.suptitle(
             f"distill · round {rounds[-1]} · sampling_weights: "
@@ -383,10 +395,6 @@ def main(argv: list[str] | None = None) -> int:
     for region in REGIONS:
         samantha.expose(f"sampling_weights.{region}", obj=sampling_weights, attr=region,
                         bounds=(0.1, 5.0))
-    # Sentinel wakes see the operator goal but not the '# daemon:' comments
-    # above, so state the goal and the lever here too.
-    samantha.goal("every region (common, edge, rare) reaches fidelity 0.95; "
-                  "sampling_weights.<region> are fair game within 0.1–5.0")
     try:
         history = train(args)
     except KeyboardInterrupt:

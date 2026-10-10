@@ -20,8 +20,8 @@ and the two demos, see the [README](../README.md).
 `import samantha` starts a resident in your process. You start the program as
 usual; there is no wrapper command. At startup Samantha:
 
-1. Finds the project root: the nearest folder above the importing file that
-   has `pyproject.toml` or `.git`.
+1. Finds the project root: the folder of the importing file, or the nearest
+   folder above it, that has `pyproject.toml` or `.git`.
 2. Prints her startup lines (`[samantha] ...`): mode, process ID, memory folder,
    entry file, goal, the number of `# daemon:` directives, and the model.
 3. Checks the OpenAI key and the model on a background thread. A failure is
@@ -98,12 +98,13 @@ samantha.goal("every region reaches fidelity 0.95")
 ```
 
 or `SAMANTHA_GOAL=...`, or `/goal <text>` in the chat. `/goal` alone shows the
-current goal. Note: a `samantha.goal()` call runs after `import samantha`, so
-the startup line still says `goal: not specified`; the goal applies from the
-call on.
+current goal. A `# daemon: goal ...` line is the goal when no other goal is
+set; the startup line shows it with `(# daemon:)`. A `samantha.goal()` call
+runs after `import samantha`, so the startup line does not show it.
 
 **Directives.** `# daemon:` comments anywhere in the project are instructions
-from you. Use them for what is allowed, what is not, and how bold to be:
+from you. Use them for what is allowed, what is not, and how bold to be.
+Samantha sees them in her theory, in each wake, and in each act turn:
 
 ```python
 # daemon: sampling_weights are fair game within 0.1-5.0
