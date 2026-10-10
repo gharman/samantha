@@ -22,6 +22,8 @@ cp .env.example .env
 Open `.env` and put your key after `OPENAI_API_KEY=`. An environment variable
 also works (`export OPENAI_API_KEY=sk-...`), and it wins over `.env`.
 
+The demos use pygame-ce (LGPL-2.1), installed separately with the `demos` extra.
+
 ## Demo 1: Samantha helps you win a game
 
 ```console
@@ -73,12 +75,18 @@ print(f"fidelity: {fidelity:.3f} (target 0.95)")  # a metric with a target
 That is all the instrumentation she needs. She finds what to change herself,
 by introspection of the running program: modules, frames, globals, objects.
 The `# daemon:` comments tell her what is allowed and what to leave alone.
-For a limit that the code enforces, not only her instructions, add
+They are instructions to the model; the code does not enforce them. To give
+her a knob with bounds that the code checks, add
 `samantha.expose("rare_weight", obj=weights, attr="rare", bounds=(0.1, 5.0))`.
 
 Put `OPENAI_API_KEY` in a `.env` in your project folder, or in the environment.
-By default Samantha only gives advice. `SAMANTHA=act` lets her change the
-program, and `SAMANTHA_AUTONOMY=goal` lets her do it without being asked. The
+Samantha sends your project's source, its output, and live values to the
+model API. By default Samantha only gives advice. `SAMANTHA=act` lets her
+change the program, and `SAMANTHA_AUTONOMY=goal` lets her do it without being
+asked. In act mode she can set any attribute and call any function that she
+can reach in the live program, not only the declared knobs. Read
+[what she can change, and the limits](docs/GUIDE.md#what-samantha-can-change-and-the-limits)
+before you use act mode on a program that matters. The
 [guide](docs/GUIDE.md) has the details: settings, chat, limits, and the demos.
 
 ## If the install fails
