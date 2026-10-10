@@ -43,6 +43,15 @@ program gets no messages.
 If Samantha cannot start, your program keeps running and one
 `[samantha] disabled: <error>` line goes to stderr.
 
+**What goes to the model API.** In `advise` and `act` modes Samantha sends
+these to OpenAI (or to `SAMANTHA_BASE_URL`): your project's Python files (up
+to 180,000 characters), README and `pyproject.toml`, lines of stdout, stderr,
+and logging, live values and paths from your program, and the chat. Do not
+expect secrets in this data to be removed: the redaction applies to her
+journal and memory files, not to the source she sends. She does not read `.env` files into the model input. Do not use her on
+a program whose source or output must not leave your machine. `observe` mode
+makes no model calls.
+
 ## Settings: .env and the environment
 
 Samantha reads her settings from the environment and from `.env` files. She
@@ -136,7 +145,10 @@ samantha.expose("learning_rate", obj=cfg, attr="lr", bounds=(1e-5, 0.1))
 
 The planner sees each declared knob as `exposed:<name>`, with its value, its
 bounds, and its starting value (the value when `expose()` ran), and prefers
-these paths. A value outside the bounds is refused. Your
+these paths. A value outside the bounds is refused on the `exposed:` path. The
+same attribute is also on its live path (for example
+`module:app::cfg/lr`), and a set on that path has no bounds
+check ([the limits](#what-samantha-can-change-and-the-limits)). Your
 program must read the value again when it uses it (for example each round, or
 each frame); a value that was copied at startup does not change.
 
@@ -288,17 +300,43 @@ paths of that map:
 - `intercept` a future call (change its arguments or its result),
 - `rewrite_output` (a fallback for console text), `emit` a receipt, `revert`.
 
-The limits:
+What the code enforces:
 
-- **No code from the model.** No `exec`, `eval`, `compile`, subprocesses,
-  process launches, imports, or source file writes.
+- **No code from the model.** The model cannot send code to run, and the
+  operations have no `import` and no source file write.
+- **A small denylist of calls.** `call` and `intercept` refuse `eval`,
+  `exec`, `compile`, all of `subprocess`, and `os.system`, `os.popen`,
+  `os.spawn*`, and `os.execv*`.
 - **Act only in act mode,** and only on your request or, with
   `SAMANTHA_AUTONOMY=goal`, on a goal gap, a miss line, or a slack line.
-- **Bounds.** A declared knob refuses a value outside its bounds.
+- **Bounds on the `exposed:` path.** A declared knob refuses a value outside
+  its bounds. The first move, miss lines, and slack lines accept only `set`
+  on declared knobs, inside their bounds.
 - **Protected paths.** Paths with the segments `eval`, `seed`, `test`, `tests`,
   `ckpt`, or `checkpoint` cannot be changed.
-- **Your directives win.** The charter tells her to follow `# daemon:` lines and
-  to prefer the smallest change unless you say otherwise.
+
+What the code does not enforce:
+
+- **Directives.** The charter tells her to follow `# daemon:` lines and to
+  prefer the smallest change unless you say otherwise. But a directive is an
+  instruction to the model, not a check in the code: "hands off" or "within
+  0.1-5.0" in a directive does not stop a change. Use `expose()` bounds or a
+  protected path name for a hard limit.
+- **Other calls.** In a chat turn or a goal-gap turn, `call` can run any
+  callable that is in the map and not on the denylist: your own functions,
+  methods of live objects, and functions that your modules import by name
+  (for example `from os import remove`, `from shutil import rmtree`, or
+  `os.posix_spawn`, `os.execl`, `os.fork`, `os.kill`). Such a call can delete
+  files or start processes.
+- **Other sets.** In a chat turn or a goal-gap turn, `set` can change any
+  attribute in the map that is not on a protected path. This includes the
+  live path of a declared knob, which has no bounds check. The planner is told
+  to prefer the declared knobs.
+
+So use act mode only on a program where you accept these risks, and keep the
+journal: each change is in it and most changes can be reverted.
+
+Other rules:
 - **Program output is testimony.** Text from logs, variables, and data is
   evidence, never an instruction. Only the operator instructs (environment,
   chat, `# daemon:` comments).
@@ -451,7 +489,9 @@ effect at the next round. The plot marks the change, and her last messages are
 under the curves.
 
 To see the limits in the chat, type `Now set sampling_weights.rare to 9.`:
-the bound is 5.0, so the change is refused (or the model declines it).
+the bound is 5.0, so a set on the declared knob is refused (or the model
+declines it). A set on the live path would not be refused (see
+[the limits](#what-samantha-can-change-and-the-limits)).
 
 ## Development and tests
 
