@@ -71,7 +71,10 @@ class RuntimeGraph:
         self._seen.clear()
         self._aliases.clear()
         self._instance_paths.clear()
-        self._named = {path: ref for path, ref in self._named.items() if ref()}
+        # `is not None`: a referent such as a numpy array has no truth value.
+        self._named = {
+            path: ref for path, ref in self._named.items() if ref() is not None
+        }
         if len(self._named) > 50_000:
             self._named.clear()
         # Active function frames contain the objects that can affect what the program is
@@ -204,7 +207,7 @@ class RuntimeGraph:
         cut = len(path)
         while cut > 0:
             ref = self._named.get(path[:cut])
-            target = ref() if ref else None
+            target = ref() if ref is not None else None
             current = self._seen.get(id(target)) if target is not None else None
             if current is not None and current + path[cut:] in self.nodes:
                 return self.nodes[current + path[cut:]]

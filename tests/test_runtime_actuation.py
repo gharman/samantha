@@ -130,6 +130,23 @@ def test_tuple_that_rejects_slices_does_not_break_refresh(
     assert graph.get("module:runtime_demo::keystate/[1]").read() == 1
 
 
+class NoTruthValue:
+    """Like a numpy array: asking for its truth value raises."""
+
+    def __bool__(self) -> bool:
+        raise ValueError("The truth value of an array is ambiguous")
+
+
+def test_value_without_a_truth_value_does_not_break_a_second_refresh(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    module = runtime_module(tmp_path, monkeypatch)
+    module.weights = NoTruthValue()
+    graph = RuntimeGraph(tmp_path).refresh()
+    graph.refresh()
+    assert graph.get("module:runtime_demo::weights").read() is module.weights
+
+
 def test_json_safe_accepts_tuple_that_rejects_slices() -> None:
     from samantha.act.runtime import _json_safe
 
