@@ -4,6 +4,8 @@ Samantha lives inside your Python program. Add `import samantha`: she reads the
 code, watches what it prints, notices when a goal is not met, and, if you let
 her, changes the running program to meet it. No restart, no wrapper command.
 
+https://github.com/user-attachments/assets/73e1d723-f010-4db4-83a6-97fa0350d9fe
+
 ![The aliens demo: Samantha's panel under the game](docs/img/aliens.png)
 
 ## Install
