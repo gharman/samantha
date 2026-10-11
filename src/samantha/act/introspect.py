@@ -7,7 +7,9 @@ import json
 import gc
 import re
 import sys
+import threading
 import types
+import weakref
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
@@ -59,12 +61,22 @@ class RuntimeGraph:
         # (id(class), attribute) -> instance-level paths the program reads in place
         # of that class attribute: instance __dict__ entries and bound methods.
         self._instance_paths: dict[tuple[int, str], list[str]] = {}
+        # Which object each path last named, kept across refreshes. A path read from
+        # one refresh can vanish by the next (a pool worker finishes its request), so
+        # get() finds the same object under whatever path reaches it now.
+        self._named: dict[str, weakref.ref[Any]] = {}
 
     def refresh(self) -> "RuntimeGraph":
         self.nodes.clear()
         self._seen.clear()
         self._aliases.clear()
         self._instance_paths.clear()
+        # `is not None`: a referent such as a numpy array has no truth value.
+        self._named = {
+            path: ref for path, ref in self._named.items() if ref() is not None
+        }
+        if len(self._named) > 50_000:
+            self._named.clear()
         # Active function frames contain the objects that can affect what the program is
         # doing now; index them first so bounded planner views retain them. Modules come
         # before loose instances so shared objects are expanded under durable paths.
@@ -174,6 +186,8 @@ class RuntimeGraph:
                 resolved = self._aliases[prefix] + path[len(prefix) :]
                 if resolved in self.nodes:
                     return self.nodes[resolved]
+        if node := self._by_identity(path):
+            return node
         raise KeyError(f"live path not found: {path}")
 
     def _index_instance_paths(self) -> None:
@@ -187,6 +201,18 @@ class RuntimeGraph:
                     self._instance_paths.setdefault((id(cls), node.key), []).append(
                         path
                     )
+
+    def _by_identity(self, path: str) -> LiveNode | None:
+        """Re-root a path whose prefix named an object that is now reached elsewhere."""
+        cut = len(path)
+        while cut > 0:
+            ref = self._named.get(path[:cut])
+            target = ref() if ref is not None else None
+            current = self._seen.get(id(target)) if target is not None else None
+            if current is not None and current + path[cut:] in self.nodes:
+                return self.nodes[current + path[cut:]]
+            cut = path.rfind("/", 0, cut)
+        return None
 
     def _modules(self) -> None:
         for name, module in list(sys.modules.items()):
@@ -202,7 +228,11 @@ class RuntimeGraph:
                 self._add_safely(node)
 
     def _frames(self) -> None:
-        for thread_id, frame in sys._current_frames().items():
+        # The main thread outlives pool workers, so objects both can reach are named
+        # through the main thread's frames when it has any.
+        main = threading.main_thread().ident
+        frames = sorted(sys._current_frames().items(), key=lambda item: item[0] != main)
+        for thread_id, frame in frames:
             stack = []
             while frame:
                 stack.append(frame)
@@ -272,6 +302,10 @@ class RuntimeGraph:
             or isinstance(value, types.ModuleType)
         ):
             return
+        try:
+            self._named[node.path] = weakref.ref(value)
+        except TypeError:
+            pass  # dicts and lists cannot be weakly referenced; their owner resolves
         identity = id(value)
         if identity in self._seen:
             self._aliases[node.path] = self._seen[identity]

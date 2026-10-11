@@ -76,8 +76,10 @@ That is all the instrumentation she needs. She finds what to change herself,
 by introspection of the running program: modules, frames, globals, objects.
 The `# daemon:` comments tell her what is allowed and what to leave alone.
 They are instructions to the model; the code does not enforce them. To give
-her a knob with bounds that the code checks, add
+her a declared knob with bounds, add
 `samantha.expose("rare_weight", obj=weights, attr="rare", bounds=(0.1, 5.0))`.
+The code checks the bounds when she changes the knob through `exposed:rare_weight`;
+a write to `weights.rare` through another path is not checked.
 
 Put `OPENAI_API_KEY` in a `.env` in your project folder, or in the environment.
 Samantha sends your project's source, its output, and live values to the
